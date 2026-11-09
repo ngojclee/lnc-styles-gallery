@@ -1,6 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router"
 import { useQuery } from "@tanstack/react-query"
-import { ExternalLink, Palette, Sparkles, Terminal } from "lucide-react"
+import { ExternalLink, Sparkles, Terminal } from "lucide-react"
 
 import { healthQuery } from "@/api/styles"
 import { NAV_GROUPS } from "@/components/layout/nav"
@@ -42,8 +42,8 @@ export function AppSidebar() {
               tooltip="LNC Style Library"
             >
               <Link to="/styles">
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-violet-500 text-primary-foreground shadow-sm">
-                <Palette className="size-4" />
+              <div className="flex aspect-square size-8 items-center justify-center overflow-hidden rounded-lg shadow-sm">
+                <img src="/favicon.svg" alt="LNC Style Gallery" className="size-full" />
               </div>
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-bold tracking-tight">LNC STYLE GALLERY</span>
