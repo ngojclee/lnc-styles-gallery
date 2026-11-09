@@ -12,7 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as CollectionsRouteImport } from './routes/collections'
+import { Route as ComponentsRouteImport } from './routes/components'
 import { Route as LicensesRouteImport } from './routes/licenses'
+import { Route as PlatformsRouteImport } from './routes/platforms'
 import { Route as StylesRouteImport } from './routes/styles'
 import { Route as TemplatesRouteImport } from './routes/templates'
 
@@ -31,9 +33,19 @@ const CollectionsRoute = CollectionsRouteImport.update({
   path: '/collections',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ComponentsRoute = ComponentsRouteImport.update({
+  id: '/components',
+  path: '/components',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LicensesRoute = LicensesRouteImport.update({
   id: '/licenses',
   path: '/licenses',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PlatformsRoute = PlatformsRouteImport.update({
+  id: '/platforms',
+  path: '/platforms',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StylesRoute = StylesRouteImport.update({
@@ -51,7 +63,9 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/collections': typeof CollectionsRoute
+  '/components': typeof ComponentsRoute
   '/licenses': typeof LicensesRoute
+  '/platforms': typeof PlatformsRoute
   '/styles': typeof StylesRoute
   '/templates': typeof TemplatesRoute
 }
@@ -59,7 +73,9 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/collections': typeof CollectionsRoute
+  '/components': typeof ComponentsRoute
   '/licenses': typeof LicensesRoute
+  '/platforms': typeof PlatformsRoute
   '/styles': typeof StylesRoute
   '/templates': typeof TemplatesRoute
 }
@@ -68,22 +84,41 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/collections': typeof CollectionsRoute
+  '/components': typeof ComponentsRoute
   '/licenses': typeof LicensesRoute
+  '/platforms': typeof PlatformsRoute
   '/styles': typeof StylesRoute
   '/templates': typeof TemplatesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/admin' | '/collections' | '/licenses' | '/styles' | '/templates'
+    | '/'
+    | '/admin'
+    | '/collections'
+    | '/components'
+    | '/licenses'
+    | '/platforms'
+    | '/styles'
+    | '/templates'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/admin' | '/collections' | '/licenses' | '/styles' | '/templates'
+  to:
+    | '/'
+    | '/admin'
+    | '/collections'
+    | '/components'
+    | '/licenses'
+    | '/platforms'
+    | '/styles'
+    | '/templates'
   id:
     | '__root__'
     | '/'
     | '/admin'
     | '/collections'
+    | '/components'
     | '/licenses'
+    | '/platforms'
     | '/styles'
     | '/templates'
   fileRoutesById: FileRoutesById
@@ -92,7 +127,9 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
   CollectionsRoute: typeof CollectionsRoute
+  ComponentsRoute: typeof ComponentsRoute
   LicensesRoute: typeof LicensesRoute
+  PlatformsRoute: typeof PlatformsRoute
   StylesRoute: typeof StylesRoute
   TemplatesRoute: typeof TemplatesRoute
 }
@@ -120,11 +157,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CollectionsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/components': {
+      id: '/components'
+      path: '/components'
+      fullPath: '/components'
+      preLoaderRoute: typeof ComponentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/licenses': {
       id: '/licenses'
       path: '/licenses'
       fullPath: '/licenses'
       preLoaderRoute: typeof LicensesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/platforms': {
+      id: '/platforms'
+      path: '/platforms'
+      fullPath: '/platforms'
+      preLoaderRoute: typeof PlatformsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/styles': {
@@ -148,7 +199,9 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
   CollectionsRoute: CollectionsRoute,
+  ComponentsRoute: ComponentsRoute,
   LicensesRoute: LicensesRoute,
+  PlatformsRoute: PlatformsRoute,
   StylesRoute: StylesRoute,
   TemplatesRoute: TemplatesRoute,
 }

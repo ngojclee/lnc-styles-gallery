@@ -3,6 +3,8 @@ import type {
   AdminSettingsResponse,
   CollectionDetailResponse,
   CollectionItem,
+  ComponentDetail,
+  ComponentsListResponse,
   CorpusStatus,
   LicensesResponse,
   SearchResponse,
@@ -106,6 +108,30 @@ export async function fetchTemplates(params: {
 
 export async function fetchTemplateDetail(templateId: string): Promise<TemplateDetail> {
   return fetchJson<TemplateDetail>(`/api/templates/${encodeURIComponent(templateId)}`)
+}
+
+export async function fetchComponents(params: {
+  category?: string
+  kind?: string
+  q?: string
+  limit?: number
+  offset?: number
+} = {}): Promise<ComponentsListResponse> {
+  const sp = new URLSearchParams()
+  if (params.category) sp.set("category", params.category)
+  if (params.kind) sp.set("kind", params.kind)
+  if (params.q) sp.set("q", params.q)
+  sp.set("limit", String(params.limit ?? 200))
+  sp.set("offset", String(params.offset ?? 0))
+  return fetchJson<ComponentsListResponse>(`/api/components?${sp.toString()}`)
+}
+
+export async function fetchComponentDetail(
+  componentId: string,
+  includeSource = false
+): Promise<ComponentDetail> {
+  const sp = new URLSearchParams({ include_source: String(includeSource) })
+  return fetchJson<ComponentDetail>(`/api/components/${encodeURIComponent(componentId)}?${sp.toString()}`)
 }
 
 export async function fetchLicenses(): Promise<LicensesResponse> {

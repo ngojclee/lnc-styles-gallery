@@ -7,6 +7,7 @@ VERSION_FILE = ROOT_DIR / "VERSION"
 
 NAS_REFERO_DEFAULT = Path(r"\\10.21.2.2\data\_agentsync\repos\refero-styles")
 NAS_PROMPT_UI_DEFAULT = Path(r"\\10.21.2.2\data\_agentsync\repos\prompt-driven-ui")
+NAS_COMPONENTS_DEFAULT = Path(r"\\10.21.2.2\data\_agentsync\repos\lnc-components")
 
 
 def get_version() -> str:
@@ -29,6 +30,7 @@ class Settings:
         self.data_dir: Path = Path(os.environ.get("STYLES_DATA_DIR", str(ROOT_DIR / "data")))
         self._refero_override: str = os.environ.get("REFERO_STYLES_DIR", "").strip()
         self._prompt_ui_override: str = os.environ.get("PROMPT_UI_DIR", "").strip()
+        self._components_override: str = os.environ.get("COMPONENTS_DIR", "").strip()
         self.auto_warm_cache: bool = os.environ.get("STYLES_AUTO_WARM_CACHE", "false").lower() in ("1", "true", "yes")
 
     def resolve_refero_dir(self) -> Path:
@@ -63,9 +65,26 @@ class Settings:
             pass
         return local_candidate
 
+    def resolve_components_dir(self) -> Path:
+        if self._components_override:
+            return Path(self._components_override)
+        local_candidate = self.data_dir / "lnc-components"
+        try:
+            if (local_candidate / "index.json").exists() or (local_candidate / "items").exists():
+                return local_candidate
+        except Exception:
+            pass
+        try:
+            if NAS_COMPONENTS_DEFAULT.exists():
+                return NAS_COMPONENTS_DEFAULT
+        except Exception:
+            pass
+        return local_candidate
+
     def masked_dict(self) -> Dict[str, Any]:
         refero_dir = self.resolve_refero_dir()
         prompt_ui_dir = self.resolve_prompt_ui_dir()
+        components_dir = self.resolve_components_dir()
         return {
             "service_name": self.service_name,
             "app_title": self.app_title,
@@ -75,6 +94,7 @@ class Settings:
             "data_dir": str(self.data_dir),
             "refero_styles_dir": str(refero_dir),
             "prompt_ui_dir": str(prompt_ui_dir),
+            "components_dir": str(components_dir),
             "auth_mode": "api_key" if self.api_key else "internal_open",
             "api_key_configured": bool(self.api_key),
             "api_key_masked": ("***" + self.api_key[-4:]) if len(self.api_key) > 4 else ("***" if self.api_key else ""),

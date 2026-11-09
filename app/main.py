@@ -321,6 +321,44 @@ async def api_get_template_asset(template_id: str, filename: str) -> Response:
     raise HTTPException(status_code=404, detail=f"Asset not found: {filename}")
 
 
+@app.get("/api/components")
+async def api_list_components(
+    category: Optional[str] = Query(default=None, description="Filter by component category"),
+    kind: Optional[str] = Query(default=None, description="Filter by kind: html (live demo) or tsx (source)"),
+    q: Optional[str] = Query(default=None, description="Filter by name, description, or tags"),
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> Dict[str, Any]:
+    return store.list_components(category=category, kind=kind, q=q, limit=limit, offset=offset)
+
+
+@app.get("/api/components/{component_id}/html")
+async def api_get_component_html(component_id: str) -> Response:
+    file_path = store.get_component_file_path(component_id, "html")
+    if not file_path:
+        raise HTTPException(status_code=404, detail=f"Component has no HTML demo: {component_id}")
+    return HTMLResponse(content=file_path.read_text(encoding="utf-8", errors="replace"))
+
+
+@app.get("/api/components/{component_id}/files/{filename:path}")
+async def api_get_component_file(component_id: str, filename: str) -> Response:
+    file_path = store.get_component_file_path(component_id, filename)
+    if not file_path:
+        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+    return FileResponse(file_path)
+
+
+@app.get("/api/components/{component_id}")
+async def api_get_component(
+    component_id: str,
+    include_source: bool = Query(default=False, description="Include source file contents in payload"),
+) -> Dict[str, Any]:
+    comp = store.get_component(component_id, include_source=include_source)
+    if not comp:
+        raise HTTPException(status_code=404, detail=f"Component not found: {component_id}")
+    return comp
+
+
 @app.get("/api/licenses")
 async def api_licenses() -> Dict[str, Any]:
     return store.get_licenses()
@@ -382,6 +420,8 @@ if UI_DIR.exists():
 @app.get("/styles", response_class=HTMLResponse)
 @app.get("/collections", response_class=HTMLResponse)
 @app.get("/templates", response_class=HTMLResponse)
+@app.get("/components", response_class=HTMLResponse)
+@app.get("/platforms", response_class=HTMLResponse)
 @app.get("/licenses", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 async def serve_spa_index() -> Response:

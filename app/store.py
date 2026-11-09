@@ -216,6 +216,8 @@ class StyleLibraryStore:
         self.collections_by_id: Dict[str, Dict[str, Any]] = {}
         self.templates: List[Dict[str, Any]] = []
         self.templates_by_id: Dict[str, Dict[str, Any]] = {}
+        self.components: List[Dict[str, Any]] = []
+        self.components_by_id: Dict[str, Dict[str, Any]] = {}
         self._design_cache: Dict[str, str] = {}
         self._meta_cache: Dict[str, Dict[str, Any]] = {}
         self._preview_cache: Dict[str, str] = {}
@@ -223,6 +225,7 @@ class StyleLibraryStore:
         self.last_index_duration_ms: int = 0
         self.refero_dir: Path = settings.resolve_refero_dir()
         self.prompt_ui_dir: Path = settings.resolve_prompt_ui_dir()
+        self.components_dir: Path = settings.resolve_components_dir()
         self.index_warnings: List[str] = []
 
     def _ensure_indexed(self) -> None:
@@ -233,23 +236,28 @@ class StyleLibraryStore:
         t0 = time.perf_counter()
         refero_dir = settings.resolve_refero_dir()
         prompt_ui_dir = settings.resolve_prompt_ui_dir()
+        components_dir = settings.resolve_components_dir()
         warnings: List[str] = []
 
         styles_list, styles_map, preview_map = self._scan_refero_styles(refero_dir, warnings)
         collections_list, collections_map = self._build_collections(refero_dir, styles_list, warnings)
         templates_list, templates_map = self._scan_prompt_ui_templates(prompt_ui_dir, warnings)
+        components_list, components_map = self._scan_components(components_dir, warnings)
 
         duration_ms = int((time.perf_counter() - t0) * 1000)
 
         with self._lock:
             self.refero_dir = refero_dir
             self.prompt_ui_dir = prompt_ui_dir
+            self.components_dir = components_dir
             self.styles = styles_list
             self.styles_by_id = styles_map
             self.collections = collections_list
             self.collections_by_id = collections_map
             self.templates = templates_list
             self.templates_by_id = templates_map
+            self.components = components_list
+            self.components_by_id = components_map
             self._design_cache.clear()
             self._meta_cache.clear()
             self._preview_cache = preview_map
@@ -664,8 +672,188 @@ class StyleLibraryStore:
                 return index[candidate]
         return None
 
+    def _scan_components(
+        self, components_dir: Path, warnings: List[str]
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        components_list: List[Dict[str, Any]] = []
+        components_map: Dict[str, Dict[str, Any]] = {}
+
+        if not components_dir.exists():
+            warnings.append(f"Components directory not found at {components_dir}")
+            return components_list, components_map
+
+        items_dir = components_dir / "items"
+        index_file = components_dir / "index.json"
+        raw_records: List[Dict[str, Any]] = []
+        if index_file.exists():
+            try:
+                raw_data = json.loads(index_file.read_text(encoding="utf-8", errors="replace"))
+                if isinstance(raw_data, list):
+                    raw_records = [r for r in raw_data if isinstance(r, dict)]
+            except Exception as exc:
+                warnings.append(f"Failed to parse {index_file}: {exc}")
+        else:
+            warnings.append(f"Components index.json not found at {index_file}")
+
+        seen_ids: set[str] = set()
+        for item in raw_records:
+            comp_id = str(item.get("id") or "").strip()
+            if not comp_id or comp_id in seen_ids:
+                continue
+            seen_ids.add(comp_id)
+            item_dir = items_dir / comp_id
+            has_dir = item_dir.exists() and item_dir.is_dir()
+            if not has_dir:
+                continue
+
+            kind = str(item.get("kind") or "html").strip().lower()
+            entry = str(item.get("entry") or "index.html").strip()
+            html_path = item_dir / entry
+            has_html = kind == "html" and html_path.exists()
+
+            # Collect source files present on disk (for tsx/code entries)
+            files: List[str] = []
+            declared = item.get("files")
+            if isinstance(declared, list):
+                for rel in declared:
+                    rel_s = str(rel).replace("\\", "/").lstrip("/")
+                    if rel_s and (item_dir / rel_s).is_file():
+                        files.append(rel_s)
+            if not files:
+                try:
+                    for p in sorted(item_dir.rglob("*")):
+                        if p.is_file() and p.name not in ("meta.json",) and p.suffix.lower() in (
+                            ".tsx", ".ts", ".jsx", ".js", ".css", ".html", ".json", ".md",
+                        ):
+                            files.append(str(p.relative_to(item_dir)).replace("\\", "/"))
+                except Exception:
+                    pass
+
+            record = {
+                "id": comp_id,
+                "name": str(item.get("name") or comp_id).strip(),
+                "category": str(item.get("category") or "misc").strip(),
+                "kind": kind,
+                "description": str(item.get("description") or "").strip(),
+                "tags": [str(t) for t in (item.get("tags") or []) if str(t).strip()],
+                "license": str(item.get("license") or "").strip(),
+                "source_url": str(item.get("source_url") or "").strip(),
+                "author": str(item.get("author") or "").strip(),
+                "files": files,
+                "has_html": has_html,
+                "html_url": f"/api/components/{comp_id}/html" if has_html else None,
+                "_dir": str(item_dir),
+                "_entry": entry,
+            }
+            components_list.append(record)
+            components_map[comp_id] = record
+
+        components_list.sort(key=lambda r: (r["category"], r["name"].lower()))
+        return components_list, components_map
+
     def public_template_dict(self, tpl: Dict[str, Any]) -> Dict[str, Any]:
         return {k: v for k, v in tpl.items() if not k.startswith("_")}
+
+    def public_component_dict(self, comp: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: v for k, v in comp.items() if not k.startswith("_")}
+
+    def list_components(
+        self,
+        category: Optional[str] = None,
+        kind: Optional[str] = None,
+        q: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        self._ensure_indexed()
+        with self._lock:
+            items = list(self.components)
+
+        cat_counts: Dict[str, int] = {}
+        for c in items:
+            cat = c.get("category", "misc")
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+
+        if category and category.lower() not in ("all", ""):
+            cat_norm = category.lower().strip()
+            items = [c for c in items if c.get("category") == cat_norm]
+        if kind and kind.lower() in ("html", "tsx"):
+            items = [c for c in items if c.get("kind") == kind.lower()]
+
+        if q and q.strip():
+            terms = [term for term in q.lower().strip().split() if term]
+            items = [
+                c for c in items
+                if all(
+                    term in f"{c['name']} {c['category']} {c['description']} {' '.join(c.get('tags', []))} {c['id']}".lower()
+                    for term in terms
+                )
+            ]
+
+        total = len(items)
+        limit = max(1, min(limit, 500))
+        offset = max(0, offset)
+        sliced = [self.public_component_dict(c) for c in items[offset : offset + limit]]
+
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "facets": {
+                "categories": [
+                    {"id": k, "count": v}
+                    for k, v in sorted(cat_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+                ],
+            },
+            "items": sliced,
+        }
+
+    def get_component(self, component_id: str, include_source: bool = False) -> Optional[Dict[str, Any]]:
+        self._ensure_indexed()
+        with self._lock:
+            comp = self.components_by_id.get(component_id)
+            if not comp:
+                return None
+            result = self.public_component_dict(comp)
+            item_dir = Path(comp.get("_dir", ""))
+
+        meta_path = item_dir / "meta.json"
+        if meta_path.exists():
+            try:
+                result["meta"] = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+            except Exception:
+                result["meta"] = {}
+
+        if include_source:
+            sources: Dict[str, str] = {}
+            for rel in comp.get("files", []):
+                f_path = item_dir / rel
+                try:
+                    if f_path.is_file() and f_path.stat().st_size <= 512_000:
+                        sources[rel] = f_path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+            result["sources"] = sources
+        return result
+
+    def get_component_file_path(self, component_id: str, filename: str) -> Optional[Path]:
+        self._ensure_indexed()
+        with self._lock:
+            comp = self.components_by_id.get(component_id)
+            if not comp:
+                return None
+            item_dir = Path(comp.get("_dir", ""))
+            entry = comp.get("_entry") or "index.html"
+        if not filename or filename == "html":
+            filename = entry
+        target = (item_dir / filename.replace("\\", "/")).resolve()
+        try:
+            if item_dir.resolve() in target.parents or target == item_dir.resolve():
+                if target.is_file():
+                    return target
+        except Exception:
+            pass
+        return None
 
     def get_style(self, style_id: str, include_design: bool = True) -> Optional[Dict[str, Any]]:
         self._ensure_indexed()
@@ -997,11 +1185,22 @@ class StyleLibraryStore:
                 if len(matched_templates) >= 20:
                     break
 
+        with self._lock:
+            components = list(self.components)
+        matched_components: List[Dict[str, Any]] = []
+        for comp in components:
+            comp_blob = f"{comp['name']} {comp['category']} {comp['description']} {' '.join(comp.get('tags', []))} {comp['id']}".lower()
+            if all(term in comp_blob for term in terms):
+                matched_components.append(self.public_component_dict(comp))
+                if len(matched_components) >= 20:
+                    break
+
         return {
             "query": q_clean,
             "total_styles": len(scored_styles),
             "styles": matched_styles,
             "templates": matched_templates,
+            "components": matched_components,
         }
 
     def list_collections(self) -> List[Dict[str, Any]]:
@@ -1195,6 +1394,51 @@ class StyleLibraryStore:
                         "Includes corresponding generation prompts and preview thumbnails.",
                     ],
                 },
+                {
+                    "id": "lnc-components",
+                    "name": "LNC UI Effects & Components",
+                    "upstream_url": "https://styles.lengoc.me",
+                    "source": "lnc-components/items/",
+                    "author": "LNC",
+                    "license": "LNC Internal (original work)",
+                    "total_components": len([c for c in self.components if c.get("kind") == "html"]),
+                    "count": len([c for c in self.components if c.get("kind") == "html"]),
+                    "license_note": (
+                        "Self-contained HTML/CSS/JS effect and component demos authored in-house: "
+                        "buttons, cards, loaders, toggles, animated backgrounds, text effects, and AI-agent "
+                        "components. Original work — free to reuse inside any LNC project."
+                    ),
+                    "attribution_note": "Original LNC-authored UI effect recipes.",
+                    "terms_summary": [
+                        "Single-file HTML demos — open in an iframe or copy the inline CSS/JS.",
+                        "Standard CSS techniques (no third-party code vendored).",
+                    ],
+                },
+                {
+                    "id": "knowns-ui",
+                    "name": "Knowns UI — AI Product Component Kit",
+                    "upstream_url": "https://ui.knowns.dev",
+                    "source": "https://github.com/knowns-dev/knowns-ui",
+                    "author": "Knowns Lab",
+                    "license": "MIT",
+                    "total_components": len([c for c in self.components if c.get("kind") == "tsx"]),
+                    "count": len([c for c in self.components if c.get("kind") == "tsx"]),
+                    "license_note": (
+                        "React/TSX components and blocks for AI products (tool-call cards, approval prompts, "
+                        "agent plans, voice orb, animated backgrounds), harvested from the public shadcn "
+                        "registry at ui.knowns.dev under the MIT License (copyright 2026 Knowns Lab). "
+                        "Third-party logo icons in lib/knowns/icons are trademark-restricted and were skipped."
+                    ),
+                    "attribution_note": (
+                        "Knowns UI component sources by Knowns Lab — ui.knowns.dev — installed via "
+                        "`npx shadcn@latest add https://ui.knowns.dev/r/<name>.json`."
+                    ),
+                    "terms_summary": [
+                        "MIT License — free to use, copy, modify, and distribute with attribution.",
+                        "Update path: re-run temp_scripts/harvest_knowns.py to pull registry updates.",
+                        "Some entries marked Pro upstream are not fetched; only the free registry set is mirrored.",
+                    ],
+                },
             ],
             "attributed_sources_count": len(attributed_sites),
             "attributed_sources_total": len(attributed_sites),
@@ -1230,6 +1474,9 @@ class StyleLibraryStore:
                 "prompt_ui_dir": str(self.prompt_ui_dir),
                 "prompt_ui_exists": self.prompt_ui_dir.exists(),
                 "prompt_ui_dir_exists": self.prompt_ui_dir.exists(),
+                "components_dir": str(self.components_dir),
+                "components_dir_exists": self.components_dir.exists(),
+                "components_count": len(self.components),
                 "styles_count": len(self.styles),
                 "designs_count": designs_count,
                 "previews_count": len(self._preview_cache),

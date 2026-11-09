@@ -52,6 +52,23 @@ try:
             return {"error": f"Template not found: {template_id}"}
         return tpl
 
+    @mcp.tool(name="list_components", description="List UI effect/component recipes (LNC HTML demos + Knowns UI TSX sources) by category.")
+    def list_components(
+        category: Optional[str] = None,
+        kind: Optional[str] = None,
+        q: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        return store.list_components(category=category, kind=kind, q=q, limit=limit, offset=offset)
+
+    @mcp.tool(name="get_component", description="Get a UI component's metadata and optionally its full source (HTML demo or TSX files).")
+    def get_component(component_id: str, include_source: bool = False) -> Dict[str, Any]:
+        comp = store.get_component(component_id, include_source=include_source)
+        if not comp:
+            return {"error": f"Component not found: {component_id}"}
+        return comp
+
     @mcp.tool(name="reindex", description="Re-scan the Refero Styles and Prompt-Driven UI corpus directories without restarting.")
     def reindex() -> Dict[str, Any]:
         return store.reindex()
@@ -121,6 +138,32 @@ MCP_TOOLS_SCHEMA: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "list_components",
+        "description": "List UI effect/component recipes: LNC self-contained HTML demos (buttons, cards, loaders, backgrounds, AI-agent components) and Knowns UI TSX sources.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "Filter by category (buttons, cards, loaders, inputs-toggles, backgrounds, text-effects, ai-agent, marketing, knowns-ui)."},
+                "kind": {"type": "string", "description": "Filter by kind: 'html' (live demo) or 'tsx' (React source)."},
+                "q": {"type": "string", "description": "Search name, description, or tags."},
+                "limit": {"type": "integer", "default": 100},
+                "offset": {"type": "integer", "default": 0},
+            },
+        },
+    },
+    {
+        "name": "get_component",
+        "description": "Get a UI component's metadata; pass include_source=true to receive the full HTML demo source or all TSX file contents.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "component_id": {"type": "string", "description": "Component ID (e.g. 'lnc-aurora-bg'... or 'knowns-button')."},
+                "include_source": {"type": "boolean", "default": False},
+            },
+            "required": ["component_id"],
+        },
+    },
+    {
         "name": "reindex",
         "description": "Re-scan the Refero Styles and Prompt-Driven UI corpus directories on disk without restarting the server.",
         "inputSchema": {
@@ -166,6 +209,20 @@ def _dispatch_tool_call(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         if not tpl:
             raise ValueError(f"Template not found: {template_id}")
         return tpl
+    if name == "list_components":
+        return store.list_components(
+            category=arguments.get("category"),
+            kind=arguments.get("kind"),
+            q=arguments.get("q"),
+            limit=int(arguments.get("limit", 100)),
+            offset=int(arguments.get("offset", 0)),
+        )
+    if name == "get_component":
+        component_id = str(arguments.get("component_id") or arguments.get("id") or "").strip()
+        comp = store.get_component(component_id, include_source=bool(arguments.get("include_source", False)))
+        if not comp:
+            raise ValueError(f"Component not found: {component_id}")
+        return comp
     if name == "reindex":
         return store.reindex()
     raise KeyError(f"Unknown MCP tool: {name}")

@@ -1,6 +1,8 @@
 import {
+  Blocks,
   FileCode2,
   FolderKanban,
+  MonitorSmartphone,
   Palette,
   Scale,
   Settings2,
@@ -8,10 +10,10 @@ import {
 
 export interface NavItem {
   title: string
-  to: "/" | "/styles" | "/collections" | "/templates" | "/licenses" | "/admin"
+  to: "/" | "/styles" | "/collections" | "/templates" | "/components" | "/platforms" | "/licenses" | "/admin"
   icon: typeof Palette
   description: string
-  badgeKey?: "styles_count" | "collections_count" | "templates_count"
+  badgeKey?: "styles_count" | "collections_count" | "templates_count" | "components_count"
 }
 
 export interface NavGroup {
@@ -43,6 +45,19 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: FileCode2,
         description: "100 prompt-driven single-file HTML/CSS/JS templates",
         badgeKey: "templates_count",
+      },
+      {
+        title: "Components & Effects",
+        to: "/components",
+        icon: Blocks,
+        description: "UI effect recipes, LNC demos & Knowns UI sources",
+        badgeKey: "components_count",
+      },
+      {
+        title: "Platforms",
+        to: "/platforms",
+        icon: MonitorSmartphone,
+        description: "iOS / Android / vendor official design systems",
       },
     ],
   },

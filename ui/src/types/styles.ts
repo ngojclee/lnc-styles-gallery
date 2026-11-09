@@ -97,6 +97,36 @@ export interface TemplatesListResponse {
   }
 }
 
+export interface ComponentItem {
+  id: string
+  name: string
+  category: string
+  kind: "html" | "tsx" | string
+  description: string
+  tags: string[]
+  license: string
+  source_url: string
+  author: string
+  files: string[]
+  has_html: boolean
+  html_url: string | null
+}
+
+export interface ComponentDetail extends ComponentItem {
+  meta?: Record<string, unknown>
+  sources?: Record<string, string>
+}
+
+export interface ComponentsListResponse {
+  total: number
+  offset: number
+  limit: number
+  items: ComponentItem[]
+  facets: {
+    categories: { id: string; count: number }[]
+  }
+}
+
 export interface LicenseCorpusInfo {
   id: string
   name: string
@@ -136,6 +166,7 @@ export interface CorpusStatus {
   previews_count?: number
   collections_count: number
   templates_count: number
+  components_count?: number
   refero_dir: string
   refero_dir_exists: boolean
   prompt_ui_dir: string
