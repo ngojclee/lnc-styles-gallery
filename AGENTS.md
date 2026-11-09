@@ -126,7 +126,8 @@ Namespace: `styles__*`
 ## 5. Auth & House Conventions
 
 - Internal LNC network service (`styles.lengoc.me`).
-- Read endpoints (`/api/styles`, `/api/collections`, `/api/templates`, `/api/search`, `/api/licenses`, `/mcp`) are accessible without auth on the internal network; if `STYLES_API_KEY` is configured, `/api/admin/*` mutations verify `X-API-Key` or `Authorization: Bearer`.
+- Read endpoints (`/api/styles`, `/api/collections`, `/api/templates`, `/api/search`, `/api/licenses`) are accessible without auth on the internal network; if `STYLES_API_KEY` is configured, `/api/admin/*` and `/api/keys*` mutations verify `X-API-Key` or `Authorization: Bearer`.
+- **MCP Bearer gate (managed mode, live since v0.3.1)**: `STYLES_MCP_AUTH=1` (set in `infra/.env` on the deploy host — see `infra/.env.example`) enables `mcp_auth_middleware` requiring `Authorization: Bearer <token>` on `/mcp`. Tokens validate via `app/key_service.py` (`/config/keys.json`, writable mount `/home/Docker/lnc-styles-gallery-config`) or `STYLES_API_KEY`. The Business MCP Hub connects with its managed connector token, registered as the "Business MCP Hub Managed" key (same pattern as `lnc-pose-gallery`). Manage keys in the UI at `/keys` ("API Keys & MCP Access") or via `GET/POST/DELETE /api/keys*`, `/api/mcp/info` reports endpoint/tools/auth state.
 - All secret/key values in `/api/admin/settings` are masked (`***`).
 
 ---
