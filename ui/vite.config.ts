@@ -7,7 +7,6 @@ import { defineConfig } from 'vite'
 const API_TARGET = process.env.STYLES_API_URL || 'http://127.0.0.1:8460'
 
 export default defineConfig({
-  publicDir: false,
   plugins: [
     tanstackRouter({ target: 'react', autoCodeSplitting: true }),
     react(),
