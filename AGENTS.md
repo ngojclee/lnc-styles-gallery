@@ -25,7 +25,7 @@ lnc-styles-gallery/
 │   │   │   ├── layout/    # AppSidebar, AppHeader, nav
 │   │   │   ├── theme/     # ThemeProvider, ThemeToggle
 │   │   │   └── ui/        # shadcn/ui primitives
-│   │   ├── routes/        # __root, index (/), styles, collections, templates, licenses, admin
+│   │   ├── routes/        # __root, index (/), styles, collections, templates, platforms, components, licenses, admin
 │   │   ├── types/         # TypeScript interfaces for styles, shots, collections, templates, licenses
 │   │   ├── index.css      # Exact pose.lengoc.me dark/light theme tokens
 │   │   ├── main.tsx       # React + Router + QueryClient entry
@@ -42,7 +42,7 @@ lnc-styles-gallery/
 │   └── sync_data_from_nas.bat # Robocopy sync from NAS _agentsync/repos into ./data
 ├── Dockerfile             # Multi-stage: node:20-alpine (pnpm build) -> python:3.11-slim runtime
 ├── requirements.txt
-├── VERSION                # 0.2.0
+├── VERSION                # 0.3.0
 └── README.md
 ```
 
@@ -50,7 +50,7 @@ lnc-styles-gallery/
 
 ## 2. Data Layout & Hot Re-Indexing
 
-The backend reads two read-only corpora. By default it checks `./data/` first and falls back to the NAS UNC paths if `./data/` has not been populated yet:
+The backend reads three read-only corpora. By default it checks `./data/` first and falls back to the NAS UNC paths if `./data/` has not been populated yet:
 
 1. **Refero Styles Corpus** (`data/refero-styles` or `\\10.21.2.2\data\_agentsync\repos\refero-styles`)
    - `index.json` — Array of catalog records: `{id, url, title, tagline, theme ("light"|"dark"), source_url}`
@@ -66,6 +66,14 @@ The backend reads two read-only corpora. By default it checks `./data/` first an
    - `websites/` — 50 Vietnamese single-file HTML sample designs
    - `thumbs/` — Preview thumbnails for each template
    - `prompts-en/` & `prompts/` — Source generation prompts for each template
+
+3. **LNC Components Corpus** (`data/lnc-components` or `\\10.21.2.2\data\_agentsync\repos\lnc-components`) — 199 items
+   - `index.json` — Array of component records: `{id, name, category, kind ("html"|"tsx"), description, tags, license, source_url, files[]}`
+   - `items/<id>/` — One directory per component
+     - LNC-authored effects (49): `index.html` self-contained demo (live iframe preview) + `meta.json` — license "LNC Internal"
+     - Knowns UI kit (150): `meta.json` + `registry/.../*.tsx` upstream source files — MIT (Knowns Lab), `registry_url` preserved for re-harvest
+   - Categories: `knowns-ui`, `backgrounds`, `buttons`, `ai-agent`, `cards`, `inputs-toggles`, `loaders`, `text-effects`, `marketing`
+   - Generated/harvested by `temp_scripts/gen_components.py` and `temp_scripts/harvest_knowns.py`
 
 ### Harvest Resilience & Re-Index
 Because the Refero harvest script (`harvest_images.py`) continues adding styles and images progressively:
@@ -91,7 +99,11 @@ Because the Refero harvest script (`harvest_images.py`) continues adding styles 
 - `GET /api/templates/{template_id}` — Template metadata, generation prompt, and preview URLs
 - `GET /api/templates/{template_id}/html` — Serves the raw template HTML (`text/html`) read-only
 - `GET /api/templates/{template_id}/thumb` — Serves the template thumbnail image (or SVG fallback)
-- `GET /api/licenses` — Structured license and source attribution manifest
+- `GET /api/components` — Component catalog (`category`, `kind`, `q`, `limit`, `offset`)
+- `GET /api/components/{component_id}` — Component metadata; `?include_source=true` adds `sources` dict (file contents)
+- `GET /api/components/{component_id}/html` — Self-contained HTML demo (`text/html`) for iframe preview
+- `GET /api/components/{component_id}/files/{path}` — Raw source file download (e.g. TSX)
+- `GET /api/licenses` — Structured license and source attribution manifest (4 corpora incl. update/re-harvest URLs)
 - `POST /api/admin/reindex` — Re-scan corpus directories on demand
 - `GET /api/admin/status` & `GET /api/admin/settings` — Corpus diagnostics and masked configuration
 
@@ -105,6 +117,8 @@ Namespace: `styles__*`
 - `styles__get_design` — Fetch full `DESIGN.md` and metadata for a style ID
 - `styles__list_collections` — List all derived and sitemap style collections with counts
 - `styles__get_template` — Fetch prompt-driven-ui template metadata, prompt, and optional HTML source
+- `styles__list_components` — List/filter components by `category`, `kind`, `limit`, `offset`
+- `styles__get_component` — Fetch component metadata + source file contents
 - `styles__reindex` — Trigger a live corpus re-scan
 
 ---
@@ -124,3 +138,7 @@ Namespace: `styles__*`
    - Each style record preserves its original `url` (Refero page) and `source_url` (attributed product website).
 2. **Prompt-Driven UI (`vuhung16au/prompt-driven-ui`)**
    - 100 HTML/CSS/JS sample templates and prompts (50 EN + 50 VI), licensed under the **MIT License**.
+3. **LNC UI Effects & Components (`lnc-components`)**
+   - 49 self-contained HTML/CSS effect demos authored in-house — **LNC Internal**, no third-party code.
+4. **Knowns UI (`knowns-dev/knowns-ui`, ui.knowns.dev)**
+   - 150 AI-product component TSX sources harvested from the public shadcn registry (`/r/registry.json`), licensed under **MIT** (third-party logos/trademarks excluded from the MIT grant). Each item preserves `source_url` (docs page) and `registry_url` for re-harvest via `temp_scripts/harvest_knowns.py`.
