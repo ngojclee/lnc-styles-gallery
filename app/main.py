@@ -1,4 +1,5 @@
 import html
+import mimetypes
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -12,6 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from app.config import ROOT_DIR, settings
 from app.mcp_server import mcp_router
 from app.store import store
+
+# FileResponse guesses content-type via mimetypes — Alpine's table lacks these
+mimetypes.add_type("image/webp", ".webp")
+mimetypes.add_type("image/avif", ".avif")
+mimetypes.add_type("video/mp4", ".mp4")
+mimetypes.add_type("video/webm", ".webm")
 
 UI_DIR = ROOT_DIR / "ui"
 UI_DIST_DIR = UI_DIR / "dist"
