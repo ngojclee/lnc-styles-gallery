@@ -144,6 +144,20 @@ COLLECTION_DEFINITIONS: List[Dict[str, Any]] = [
             "drink", "beauty", "wear", "market",
         ],
     },
+    {
+        "id": "platform-system",
+        "name": "Platform Design Systems",
+        "description": "Official vendor design systems — Apple HIG, Material 3, Fluent 2, Carbon, Polaris, Primer, Ant Design, and other published token specs.",
+        "kind": "category",
+        "accent": "#0ea5e9",
+        "keywords": [
+            "human interface", "material you", "material design", "fluent design", "fluent2",
+            "carbon design", "carbondesignsystem", "polaris", "atlassian", "primer.style",
+            "ant design", "ant.design", "lightning design", "lightningdesignsystem",
+            "uswds", "digital.gov", "gov.uk", "govuk", "shadcn", "radix",
+            "tailwind", "bootstrap",
+        ],
+    },
 ]
 
 
@@ -365,7 +379,11 @@ class StyleLibraryStore:
             or ""
         ).strip()
 
-        categories = _classify_style(title, tagline, raw_theme, source_url)
+        declared = raw.get("categories")
+        if isinstance(declared, list) and declared:
+            categories = [str(c).strip() for c in declared if str(c).strip()]
+        else:
+            categories = _classify_style(title, tagline, raw_theme, source_url)
         has_folder = (style_id in existing_style_dirs) if existing_style_dirs else True
 
         preview_path: Optional[Path] = None
