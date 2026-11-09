@@ -70,7 +70,7 @@ function ZoomSurface({ imageUrl, alt = 'Image Preview', children, contentWidth =
     if (points.length === 1) return { ...points[0], distance: 0 }
     return { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2, distance: Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) }
   }
-  return <div className={cn('flex min-h-0 w-full flex-col gap-2', className)}>
+  return <div className={cn('flex h-full min-h-0 w-full flex-col gap-2', className)}>
     <div className="flex shrink-0 flex-wrap items-center justify-center gap-2" aria-label="Image zoom controls">
       <Button type="button" variant="outline" className="min-h-11 min-w-11" aria-label="Zoom out" disabled={view.zoom <= 1} onClick={() => zoomAt(current.current.zoom / 1.25)}><MinusIcon className="size-4" /></Button>
       <span className="min-w-16 text-center text-sm tabular-nums" aria-live="polite">{Math.round(view.zoom * 100)}%</span>

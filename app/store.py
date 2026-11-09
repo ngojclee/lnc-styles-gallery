@@ -615,7 +615,7 @@ class StyleLibraryStore:
         if not directory.exists() or not directory.is_dir():
             return result
         try:
-            for entry in directory.iterdir():
+            for entry in sorted(directory.rglob("*"), key=lambda p: ("landscape" in p.parts, p.name)):
                 if entry.is_file() and entry.suffix.lower() in suffixes:
                     stem_lower = entry.stem.lower()
                     result[stem_lower] = entry

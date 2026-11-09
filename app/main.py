@@ -260,22 +260,6 @@ async def api_get_template_html(template_id: str) -> Response:
     return HTMLResponse(content=content)
 
 
-@app.get("/api/templates/{template_id}/{filename}")
-async def api_get_template_asset(template_id: str, filename: str) -> Response:
-    """Serve sibling assets (style.css, script.js, images) referenced relatively by the template HTML."""
-    raw = store.get_template_raw_paths(template_id)
-    if not raw:
-        raise HTTPException(status_code=404, detail=f"Template not found: {template_id}")
-    html_path_str = raw.get("_html_path", "")
-    if not html_path_str:
-        raise HTTPException(status_code=404, detail=f"Template has no HTML file: {template_id}")
-    base_dir = Path(html_path_str).parent.resolve()
-    target = (base_dir / filename).resolve()
-    if target != base_dir and base_dir in target.parents and target.is_file():
-        return FileResponse(target)
-    raise HTTPException(status_code=404, detail=f"Asset not found: {filename}")
-
-
 @app.get("/api/templates/{template_id}/thumb")
 async def api_get_template_thumb(template_id: str) -> Response:
     raw = store.get_template_raw_paths(template_id)
@@ -312,6 +296,22 @@ async def api_get_template_thumb(template_id: str) -> Response:
   <text x="122" y="272" fill="#ffffff" font-family="system-ui, sans-serif" font-size="13" font-weight="600" text-anchor="middle">HTML Template</text>
 </svg>"""
     return Response(content=svg, media_type="image/svg+xml")
+
+
+@app.get("/api/templates/{template_id}/{filename}")
+async def api_get_template_asset(template_id: str, filename: str) -> Response:
+    """Serve sibling assets (style.css, script.js, images) referenced relatively by the template HTML."""
+    raw = store.get_template_raw_paths(template_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail=f"Template not found: {template_id}")
+    html_path_str = raw.get("_html_path", "")
+    if not html_path_str:
+        raise HTTPException(status_code=404, detail=f"Template has no HTML file: {template_id}")
+    base_dir = Path(html_path_str).parent.resolve()
+    target = (base_dir / filename).resolve()
+    if target != base_dir and base_dir in target.parents and target.is_file():
+        return FileResponse(target)
+    raise HTTPException(status_code=404, detail=f"Asset not found: {filename}")
 
 
 @app.get("/api/licenses")
