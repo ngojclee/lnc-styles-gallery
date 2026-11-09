@@ -14,8 +14,8 @@ try:
 
     mcp = FastMCP("lnc-styles-gallery")
 
-    @mcp.tool(name="styles__list_styles", description="List Refero design styles with optional theme and category filters.")
-    def styles__list_styles(
+    @mcp.tool(name="list_styles", description="List Refero design styles with optional theme and category filters.")
+    def list_styles(
         theme: Optional[str] = None,
         category: Optional[str] = None,
         limit: int = 48,
@@ -23,8 +23,8 @@ try:
     ) -> Dict[str, Any]:
         return store.list_styles(theme=theme, category=category, limit=limit, offset=offset)
 
-    @mcp.tool(name="styles__search", description="Search design styles by title, tagline, source URL, and DESIGN.md content.")
-    def styles__search(
+    @mcp.tool(name="search", description="Search design styles by title, tagline, source URL, and DESIGN.md content.")
+    def search(
         query: str,
         theme: Optional[str] = None,
         category: Optional[str] = None,
@@ -33,27 +33,27 @@ try:
     ) -> Dict[str, Any]:
         return store.search(query=query, theme=theme, category=category, include_content=include_content, limit=limit)
 
-    @mcp.tool(name="styles__get_design", description="Get full DESIGN.md specification and metadata for a specific Refero style ID.")
-    def styles__get_design(style_id: str) -> Dict[str, Any]:
+    @mcp.tool(name="get_design", description="Get full DESIGN.md specification and metadata for a specific Refero style ID.")
+    def get_design(style_id: str) -> Dict[str, Any]:
         item = store.get_style(style_id, include_design=True)
         if not item:
             return {"error": f"Style not found: {style_id}"}
         return item
 
-    @mcp.tool(name="styles__list_collections", description="List grouped style collections by category, mood, and theme.")
-    def styles__list_collections() -> Dict[str, Any]:
+    @mcp.tool(name="list_collections", description="List grouped style collections by category, mood, and theme.")
+    def list_collections() -> Dict[str, Any]:
         cols = store.list_collections()
         return {"total": len(cols), "collections": cols}
 
-    @mcp.tool(name="styles__get_template", description="Get prompt-driven-ui HTML template metadata, generation prompt, and optional HTML source.")
-    def styles__get_template(template_id: str, include_html: bool = False) -> Dict[str, Any]:
+    @mcp.tool(name="get_template", description="Get prompt-driven-ui HTML template metadata, generation prompt, and optional HTML source.")
+    def get_template(template_id: str, include_html: bool = False) -> Dict[str, Any]:
         tpl = store.get_template(template_id, include_html=include_html)
         if not tpl:
             return {"error": f"Template not found: {template_id}"}
         return tpl
 
-    @mcp.tool(name="styles__reindex", description="Re-scan the Refero Styles and Prompt-Driven UI corpus directories without restarting.")
-    def styles__reindex() -> Dict[str, Any]:
+    @mcp.tool(name="reindex", description="Re-scan the Refero Styles and Prompt-Driven UI corpus directories without restarting.")
+    def reindex() -> Dict[str, Any]:
         return store.reindex()
 
 except Exception:
@@ -62,7 +62,7 @@ except Exception:
 
 MCP_TOOLS_SCHEMA: List[Dict[str, Any]] = [
     {
-        "name": "styles__list_styles",
+        "name": "list_styles",
         "description": "List Refero design styles with optional theme ('light'|'dark') and category/collection filters.",
         "inputSchema": {
             "type": "object",
@@ -75,7 +75,7 @@ MCP_TOOLS_SCHEMA: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "styles__search",
+        "name": "search",
         "description": "Search Refero design styles (title, tagline, source_url, DESIGN.md tokens/rules) and HTML templates.",
         "inputSchema": {
             "type": "object",
@@ -90,7 +90,7 @@ MCP_TOOLS_SCHEMA: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "styles__get_design",
+        "name": "get_design",
         "description": "Retrieve full DESIGN.md markdown style guide and metadata for a style ID.",
         "inputSchema": {
             "type": "object",
@@ -101,7 +101,7 @@ MCP_TOOLS_SCHEMA: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "styles__list_collections",
+        "name": "list_collections",
         "description": "List all browsable style collections (by mood/category, theme, and sitemap) with counts and sample styles.",
         "inputSchema": {
             "type": "object",
@@ -109,7 +109,7 @@ MCP_TOOLS_SCHEMA: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "styles__get_template",
+        "name": "get_template",
         "description": "Retrieve a prompt-driven-ui HTML template's metadata, generation prompt, and optionally its full HTML code.",
         "inputSchema": {
             "type": "object",
@@ -121,7 +121,7 @@ MCP_TOOLS_SCHEMA: List[Dict[str, Any]] = [
         },
     },
     {
-        "name": "styles__reindex",
+        "name": "reindex",
         "description": "Re-scan the Refero Styles and Prompt-Driven UI corpus directories on disk without restarting the server.",
         "inputSchema": {
             "type": "object",
@@ -132,7 +132,9 @@ MCP_TOOLS_SCHEMA: List[Dict[str, Any]] = [
 
 
 def _dispatch_tool_call(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    if name == "styles__list_styles":
+    while name.startswith("styles__"):
+        name = name[len("styles__"):]
+    if name == "list_styles":
         return store.list_styles(
             q=arguments.get("q"),
             theme=arguments.get("theme"),
@@ -140,7 +142,7 @@ def _dispatch_tool_call(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
             limit=int(arguments.get("limit", 48)),
             offset=int(arguments.get("offset", 0)),
         )
-    if name == "styles__search":
+    if name == "search":
         return store.search(
             query=str(arguments.get("query") or arguments.get("q") or ""),
             theme=arguments.get("theme"),
@@ -148,23 +150,23 @@ def _dispatch_tool_call(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
             include_content=bool(arguments.get("include_content", True)),
             limit=int(arguments.get("limit", 25)),
         )
-    if name == "styles__get_design":
+    if name == "get_design":
         style_id = str(arguments.get("style_id") or arguments.get("id") or "").strip()
         item = store.get_style(style_id, include_design=True)
         if not item:
             raise ValueError(f"Style not found: {style_id}")
         return item
-    if name == "styles__list_collections":
+    if name == "list_collections":
         cols = store.list_collections()
         return {"total": len(cols), "collections": cols}
-    if name == "styles__get_template":
+    if name == "get_template":
         template_id = str(arguments.get("template_id") or arguments.get("id") or "").strip()
         include_html = bool(arguments.get("include_html", False))
         tpl = store.get_template(template_id, include_html=include_html)
         if not tpl:
             raise ValueError(f"Template not found: {template_id}")
         return tpl
-    if name == "styles__reindex":
+    if name == "reindex":
         return store.reindex()
     raise KeyError(f"Unknown MCP tool: {name}")
 
