@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LNC Style Library — Design Systems & HTML Templates</title>
+  <link rel="stylesheet" href="/ui/styles.css" />
+</head>
+<body>
+  <header class="top-header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-logo">S</div>
+        <div>
+          <div class="brand-title">LNC Style Library</div>
+          <div class="brand-subtitle">Refero Design Systems &bull; Prompt-Driven UI Templates &bull; MCP Server</div>
+        </div>
+      </div>
+
+      <nav class="nav-tabs" role="tablist">
+        <a href="#styles" class="nav-tab active" data-tab="styles">
+          <span>Styles</span>
+          <span class="nav-badge" id="badge-styles">0</span>
+        </a>
+        <a href="#collections" class="nav-tab" data-tab="collections">
+          <span>Collections</span>
+          <span class="nav-badge" id="badge-collections">0</span>
+        </a>
+        <a href="#templates" class="nav-tab" data-tab="templates">
+          <span>HTML Templates</span>
+          <span class="nav-badge" id="badge-templates">0</span>
+        </a>
+        <a href="#licenses" class="nav-tab" data-tab="licenses">
+          <span>Licenses</span>
+        </a>
+      </nav>
+
+      <div class="header-actions">
+        <button class="btn" id="btn-reindex" title="Re-scan corpus directory without restart">
+          &#x21bb; Re-Index
+        </button>
+        <a class="btn" href="/admin">Admin</a>
+        <a class="btn" href="/docs" target="_blank" rel="noopener">API Docs</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <!-- TAB 1: #styles -->
+    <section id="panel-styles" class="tab-panel active">
+      <div class="toolbar">
+        <div class="toolbar-row">
+          <div class="search-box">
+            <input
+              type="search"
+              id="styles-search-input"
+              class="search-input"
+              placeholder="Search styles by title, tagline, product URL, or DESIGN.md tokens (e.g. monospace, brutalist, #0a0a0a)..."
+            />
+            <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.78rem;color:var(--text-secondary);white-space:nowrap;">
+              <input type="checkbox" id="styles-search-content" checked />
+              Search DESIGN.md
+            </label>
+          </div>
+
+          <div class="segmented-group" id="theme-filter-group">
+            <button class="seg-btn active" data-theme="all">All Themes</button>
+            <button class="seg-btn" data-theme="dark">Dark</button>
+            <button class="seg-btn" data-theme="light">Light</button>
+          </div>
+        </div>
+
+        <div class="chips-row" id="category-chips-row">
+          <button class="chip active" data-category="all">All Categories</button>
+        </div>
+      </div>
+
+      <div class="results-summary">
+        <span id="styles-summary-text">Loading design styles...</span>
+        <span id="styles-active-filters"></span>
+      </div>
+
+      <div class="card-grid" id="styles-grid"></div>
+
+      <div class="pagination-bar" id="styles-pagination"></div>
+    </section>
+
+    <!-- TAB 2: #collections -->
+    <section id="panel-collections" class="tab-panel">
+      <div class="results-summary">
+        <span>Curated design-system groupings by visual mood, domain category, and color theme for humans &amp; AI agents.</span>
+      </div>
+      <div class="card-grid" id="collections-grid"></div>
+    </section>
+
+    <!-- TAB 3: #templates -->
+    <section id="panel-templates" class="tab-panel">
+      <div class="toolbar">
+        <div class="toolbar-row">
+          <div class="search-box">
+            <input
+              type="search"
+              id="templates-search-input"
+              class="search-input"
+              placeholder="Filter 100 HTML sample templates by title, slug, or generation prompt..."
+            />
+          </div>
+          <div class="segmented-group" id="lang-filter-group">
+            <button class="seg-btn active" data-lang="all">All (100)</button>
+            <button class="seg-btn" data-lang="en">English (EN)</button>
+            <button class="seg-btn" data-lang="vi">Vietnamese (VI)</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="results-summary">
+        <span id="templates-summary-text">Loading HTML sample templates...</span>
+      </div>
+
+      <div class="card-grid" id="templates-grid"></div>
+    </section>
+
+    <!-- TAB 4: #licenses -->
+    <section id="panel-licenses" class="tab-panel">
+      <div id="licenses-content"></div>
+    </section>
+  </main>
+
+  <!-- MODAL: Style / Template Viewer -->
+  <div class="modal-backdrop" id="detail-modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div>
+          <h2 id="modal-title" style="font-size:1.2rem;font-weight:700;">Style Details</h2>
+          <div id="modal-subtitle" style="font-size:0.82rem;color:var(--text-secondary);"></div>
+        </div>
+        <button class="btn" id="modal-close-btn">&times; Close (Esc)</button>
+      </div>
+      <div class="modal-toolbar" id="modal-toolbar"></div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">Copied to clipboard</div>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>

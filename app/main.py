@@ -1,9 +1,10 @@
 import html
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -13,6 +14,16 @@ from app.mcp_server import mcp_router
 from app.store import store
 
 UI_DIR = ROOT_DIR / "ui"
+UI_DIST_DIR = UI_DIR / "dist"
+UI_BACKUP_DIR = ROOT_DIR / "ui-vanilla-backup"
+
+
+def _resolve_spa_index() -> Path:
+    if (UI_DIST_DIR / "index.html").exists():
+        return UI_DIST_DIR / "index.html"
+    if (UI_DIR / "index.html").exists():
+        return UI_DIR / "index.html"
+    return UI_BACKUP_DIR / "index.html"
 
 
 @asynccontextmanager
@@ -23,7 +34,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="LNC Style Library (lnc-styles-gallery)",
-    description="Browsable, searchable library of Refero design styles (DESIGN.md) and Prompt-Driven UI HTML templates.",
+    description="Browsable, searchable library of Refero design styles (DESIGN.md + visual previews) and Prompt-Driven UI HTML templates.",
     version=settings.version,
     lifespan=lifespan,
 )
@@ -87,19 +98,110 @@ async def api_get_style(style_id: str) -> Dict[str, Any]:
     return item
 
 
+@app.get("/api/styles/{style_id}/preview")
+async def api_get_style_preview(style_id: str) -> Response:
+    preview_path = store.get_style_preview_path(style_id)
+    if preview_path and preview_path.exists() and preview_path.is_file():
+        return FileResponse(preview_path)
+
+    style = store.get_style(style_id, include_design=False)
+    if not style:
+        raise HTTPException(status_code=404, detail=f"Style not found: {style_id}")
+
+    # Dynamic SVG card fallback when preview.<ext> has not been harvested yet
+    is_dark = style.get("theme") == "dark"
+    bg_start = "#090d16" if is_dark else "#f8fafc"
+    bg_end = "#1e293b" if is_dark else "#e2e8f0"
+    card_bg = "#0f172a" if is_dark else "#ffffff"
+    card_border = "#334155" if is_dark else "#cbd5e1"
+    fg_main = "#f8fafc" if is_dark else "#0f172a"
+    fg_sub = "#94a3b8" if is_dark else "#475569"
+    accent = "#6366f1" if is_dark else "#0284c7"
+    theme_badge = "DARK" if is_dark else "LIGHT"
+
+    title_raw = str(style.get("title") or style_id)
+    title = html.escape(title_raw[:38] + ("…" if len(title_raw) > 38 else ""))
+    tagline_raw = str(style.get("tagline") or "Design System & UI Tokens")
+    tagline = html.escape(tagline_raw[:64] + ("…" if len(tagline_raw) > 64 else ""))
+
+    source_url = str(style.get("source_url") or "")
+    try:
+        domain = urlparse(source_url).netloc.replace("www.", "") if source_url else ""
+    except Exception:
+        domain = ""
+    domain_esc = html.escape(domain or "styles.refero.design")
+
+    cats = style.get("categories") or []
+    cat_label = html.escape(str(cats[0] if cats else "design-system").upper())
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400" width="640" height="400">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="{bg_start}"/>
+      <stop offset="100%" stop-color="{bg_end}"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="400" fill="url(#bg)"/>
+  <rect x="24" y="24" width="592" height="352" rx="16" fill="{card_bg}" stroke="{card_border}" stroke-width="1.5"/>
+  <circle cx="52" cy="54" r="6" fill="#ef4444"/>
+  <circle cx="72" cy="54" r="6" fill="#f59e0b"/>
+  <circle cx="92" cy="54" r="6" fill="#10b981"/>
+  <text x="116" y="59" fill="{fg_sub}" font-family="ui-monospace, monospace" font-size="12">{domain_esc}</text>
+  <rect x="516" y="38" width="76" height="28" rx="6" fill="{accent}" opacity="0.18"/>
+  <text x="554" y="57" fill="{accent}" font-family="system-ui, sans-serif" font-size="12" font-weight="700" text-anchor="middle">{theme_badge}</text>
+  <line x1="24" y1="82" x2="616" y2="82" stroke="{card_border}" stroke-width="1"/>
+  <rect x="52" y="112" width="130" height="24" rx="12" fill="{accent}" opacity="0.15"/>
+  <text x="117" y="128" fill="{accent}" font-family="system-ui, sans-serif" font-size="11" font-weight="700" text-anchor="middle">{cat_label}</text>
+  <text x="52" y="182" fill="{fg_main}" font-family="system-ui, sans-serif" font-size="26" font-weight="700">{title}</text>
+  <text x="52" y="218" fill="{fg_sub}" font-family="system-ui, sans-serif" font-size="14">{tagline}</text>
+  <rect x="52" y="264" width="160" height="68" rx="10" fill="{bg_start}" stroke="{card_border}" stroke-width="1"/>
+  <rect x="68" y="280" width="60" height="10" rx="5" fill="{accent}"/>
+  <rect x="68" y="300" width="110" height="8" rx="4" fill="{fg_sub}" opacity="0.45"/>
+  <rect x="228" y="264" width="160" height="68" rx="10" fill="{bg_start}" stroke="{card_border}" stroke-width="1"/>
+  <rect x="244" y="280" width="76" height="10" rx="5" fill="#10b981"/>
+  <rect x="244" y="300" width="104" height="8" rx="4" fill="{fg_sub}" opacity="0.45"/>
+  <rect x="404" y="264" width="160" height="68" rx="10" fill="{bg_start}" stroke="{card_border}" stroke-width="1"/>
+  <rect x="420" y="280" width="52" height="10" rx="5" fill="#f59e0b"/>
+  <rect x="420" y="300" width="116" height="8" rx="4" fill="{fg_sub}" opacity="0.45"/>
+</svg>"""
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={"X-Preview-Fallback": "true"},
+    )
+
+
+@app.get("/api/styles/{style_id}/shots")
+async def api_get_style_shots(style_id: str) -> List[Dict[str, Any]]:
+    style = store.get_style(style_id, include_design=False)
+    if not style and not (store.refero_dir / "styles" / style_id).exists():
+        raise HTTPException(status_code=404, detail=f"Style not found: {style_id}")
+    return store.list_style_shots(style_id)
+
+
+@app.get("/api/styles/{style_id}/shots/{n}")
+async def api_get_style_shot(style_id: str, n: str) -> Response:
+    shot_path = store.get_style_shot_path(style_id, n)
+    if not shot_path or not shot_path.exists() or not shot_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Shot {n} not found for style: {style_id}")
+    return FileResponse(shot_path)
+
+
 @app.get("/api/search")
 async def api_search(
     q: str = Query(default="", description="Search query"),
     theme: Optional[str] = Query(default=None),
     category: Optional[str] = Query(default=None),
     include_content: bool = Query(default=True),
+    include_body: Optional[bool] = Query(default=None),
     limit: int = Query(default=30, ge=1, le=200),
 ) -> Dict[str, Any]:
+    effective_include = include_body if include_body is not None else include_content
     return store.search(
         query=q,
         theme=theme,
         category=category,
-        include_content=include_content,
+        include_content=effective_include,
         limit=limit,
     )
 
@@ -204,7 +306,12 @@ async def api_licenses() -> Dict[str, Any]:
 @app.post("/api/admin/reindex", dependencies=[Depends(verify_admin_auth)])
 @app.get("/api/admin/reindex", dependencies=[Depends(verify_admin_auth)])
 async def api_admin_reindex() -> Dict[str, Any]:
-    return store.reindex()
+    st = store.reindex()
+    return {
+        **st,
+        "status": "reindexed",
+        "summary": st,
+    }
 
 
 @app.get("/api/admin/status")
@@ -214,25 +321,61 @@ async def api_admin_status() -> Dict[str, Any]:
 
 @app.get("/api/admin/settings")
 async def api_admin_settings() -> Dict[str, Any]:
+    masked = settings.masked_dict()
+    st = store.status()
     return {
-        "settings": settings.masked_dict(),
-        "corpus": store.status(),
+        "settings": masked,
+        "corpus": st,
+        "service_name": masked["service_name"],
+        "service_version": masked["version"],
+        "host": "0.0.0.0",
+        "port": masked["port"],
+        "public_base_url": masked["public_url"],
+        "data_root": masked["data_dir"],
+        "refero_dir": masked["refero_styles_dir"],
+        "refero_dir_exists": st["refero_styles_exists"],
+        "prompt_ui_dir": masked["prompt_ui_dir"],
+        "prompt_ui_dir_exists": st["prompt_ui_exists"],
+        "api_key_configured": masked["api_key_configured"],
+        "api_key_masked": masked["api_key_masked"] or "***",
+        "cors_origins": "*",
     }
 
 
-@app.get("/admin", response_class=HTMLResponse)
-async def serve_admin_page() -> Response:
-    admin_html = UI_DIR / "admin.html"
-    if admin_html.exists():
-        return FileResponse(admin_html)
-    return FileResponse(UI_DIR / "index.html")
+if (UI_DIST_DIR / "static").exists():
+    app.mount("/static", StaticFiles(directory=str(UI_DIST_DIR / "static")), name="static")
+if (UI_DIST_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(UI_DIST_DIR / "assets")), name="assets")
+elif UI_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=str(UI_DIR)), name="assets")
 
-
-@app.get("/", response_class=HTMLResponse)
-async def serve_index() -> Response:
-    return FileResponse(UI_DIR / "index.html")
-
-
+if UI_BACKUP_DIR.exists():
+    app.mount("/ui-vanilla", StaticFiles(directory=str(UI_BACKUP_DIR)), name="ui-vanilla")
 if UI_DIR.exists():
     app.mount("/ui", StaticFiles(directory=str(UI_DIR)), name="ui")
-    app.mount("/assets", StaticFiles(directory=str(UI_DIR)), name="assets")
+
+
+@app.get("/admin", response_class=HTMLResponse)
+@app.get("/styles", response_class=HTMLResponse)
+@app.get("/collections", response_class=HTMLResponse)
+@app.get("/templates", response_class=HTMLResponse)
+@app.get("/licenses", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse)
+async def serve_spa_index() -> Response:
+    return FileResponse(_resolve_spa_index())
+
+
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+async def serve_spa_fallback(full_path: str) -> Response:
+    clean_path = full_path.strip("/")
+    if clean_path.startswith("api/") or clean_path == "api" or clean_path.startswith("mcp"):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Serve static files from ui/dist (e.g. icon.svg, favicon.ico, static/*) if present
+    for base_dir in (UI_DIST_DIR, UI_DIR):
+        if base_dir.exists():
+            candidate = (base_dir / clean_path).resolve()
+            if str(candidate).startswith(str(base_dir.resolve())) and candidate.is_file():
+                return FileResponse(candidate)
+
+    return FileResponse(_resolve_spa_index())
