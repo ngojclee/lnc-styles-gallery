@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.config import settings
 
 IMAGE_SUFFIXES: Tuple[str, ...] = (".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif", ".svg")
+VIDEO_SUFFIXES: Tuple[str, ...] = (".mp4", ".webm", ".mov", ".m4v")
 
 
 COLLECTION_DEFINITIONS: List[Dict[str, Any]] = [
@@ -707,7 +708,7 @@ class StyleLibraryStore:
                     for entry in it:
                         if entry.is_file():
                             _, ext = os.path.splitext(entry.name.lower())
-                            if ext in IMAGE_SUFFIXES:
+                            if ext in IMAGE_SUFFIXES or ext in VIDEO_SUFFIXES:
                                 raw_files.append(Path(entry.path))
         except Exception:
             pass
@@ -748,6 +749,8 @@ class StyleLibraryStore:
                 "n": n_val,
                 "url": f"/api/styles/{style_id}/shots/{n_val}",
                 "filename": fpath.name,
+                "ext": fpath.suffix.lower(),
+                "kind": "video" if fpath.suffix.lower() in VIDEO_SUFFIXES else "image",
             }
             for n_val, fpath in resolved
         ]

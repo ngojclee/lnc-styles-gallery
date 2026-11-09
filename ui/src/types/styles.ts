@@ -2,6 +2,8 @@ export interface StyleShot {
   n: number
   url: string
   filename?: string
+  ext?: string
+  kind?: "image" | "video"
 }
 
 export interface StyleItem {

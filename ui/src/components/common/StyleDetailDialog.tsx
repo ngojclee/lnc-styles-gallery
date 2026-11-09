@@ -223,7 +223,7 @@ function renderMarkdownToHtml(md: string): string {
 
 export function StyleDetailDialog({ styleId, open, onOpenChange }: StyleDetailDialogProps) {
   const [viewTab, setViewTab] = useState<ViewTab>("rendered")
-  const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null)
+  const [selectedShot, setSelectedShot] = useState<{ url: string; kind: string } | null>(null)
   const [copied, setCopied] = useState(false)
 
   const detailQuery = useQuery({
@@ -245,10 +245,11 @@ export function StyleDetailDialog({ styleId, open, onOpenChange }: StyleDetailDi
   }, [shotsQuery.data, style?.shots])
 
   const defaultHeroUrl = styleId ? `/api/styles/${encodeURIComponent(styleId)}/preview` : null
-  const activeImageUrl = selectedImageUrl ?? defaultHeroUrl
+  const activeImageUrl = selectedShot?.url ?? defaultHeroUrl
+  const activeIsVideo = selectedShot?.kind === "video"
 
   useEffect(() => {
-    setSelectedImageUrl(null)
+    setSelectedShot(null)
     setViewTab("rendered")
     setCopied(false)
   }, [styleId])
@@ -373,15 +374,29 @@ export function StyleDetailDialog({ styleId, open, onOpenChange }: StyleDetailDi
                   <span>Click image to zoom</span>
                 </div>
                 {activeImageUrl ? (
-                  <div className="h-[320px] sm:h-[400px]">
-                    <ZoomViewport
-                      imageUrl={activeImageUrl}
-                      alt={style.title}
-                      contentWidth={1280}
-                      contentHeight={800}
-                      className="border border-border/70 shadow-sm"
-                    />
-                  </div>
+                  activeIsVideo ? (
+                    <div className="h-[320px] sm:h-[400px]">
+                      <video
+                        key={activeImageUrl}
+                        src={activeImageUrl}
+                        controls
+                        muted
+                        loop
+                        playsInline
+                        className="h-full w-full rounded-lg border border-border/70 bg-black object-contain shadow-sm"
+                      />
+                    </div>
+                  ) : (
+                    <div className="h-[320px] sm:h-[400px]">
+                      <ZoomViewport
+                        imageUrl={activeImageUrl}
+                        alt={style.title}
+                        contentWidth={1280}
+                        contentHeight={800}
+                        className="border border-border/70 shadow-sm"
+                      />
+                    </div>
+                  )
                 ) : null}
               </div>
 
@@ -391,10 +406,10 @@ export function StyleDetailDialog({ styleId, open, onOpenChange }: StyleDetailDi
                   <span className="font-medium text-foreground">
                     Gallery Shots ({shots.length > 0 ? `${shots.length} shots` : "Hero preview"})
                   </span>
-                  {selectedImageUrl ? (
+                  {selectedShot ? (
                     <button
                       type="button"
-                      onClick={() => setSelectedImageUrl(null)}
+                      onClick={() => setSelectedShot(null)}
                       className="text-xs text-primary hover:underline"
                     >
                       Reset to Hero
@@ -405,10 +420,10 @@ export function StyleDetailDialog({ styleId, open, onOpenChange }: StyleDetailDi
                   {defaultHeroUrl ? (
                     <button
                       type="button"
-                      onClick={() => setSelectedImageUrl(null)}
+                      onClick={() => setSelectedShot(null)}
                       className={cn(
                         "group relative aspect-[16/10] overflow-hidden rounded-lg border transition-all",
-                        !selectedImageUrl
+                        !selectedShot
                           ? "border-primary ring-2 ring-primary/30"
                           : "border-border/60 opacity-75 hover:opacity-100"
                       )}
@@ -425,12 +440,12 @@ export function StyleDetailDialog({ styleId, open, onOpenChange }: StyleDetailDi
                     </button>
                   ) : null}
                   {shots.map((shot) => {
-                    const isSelected = selectedImageUrl === shot.url
+                    const isSelected = selectedShot?.url === shot.url
                     return (
                       <button
                         key={shot.n}
                         type="button"
-                        onClick={() => setSelectedImageUrl(shot.url)}
+                        onClick={() => setSelectedShot({ url: shot.url, kind: shot.kind ?? "image" })}
                         className={cn(
                           "group relative aspect-[16/10] overflow-hidden rounded-lg border transition-all",
                           isSelected
@@ -438,14 +453,24 @@ export function StyleDetailDialog({ styleId, open, onOpenChange }: StyleDetailDi
                             : "border-border/60 opacity-75 hover:opacity-100"
                         )}
                       >
-                        <img
-                          src={shot.url}
-                          alt={`${style.title} shot #${shot.n}`}
-                          className="h-full w-full object-cover"
-                          loading="lazy"
-                        />
+                        {shot.kind === "video" ? (
+                          <video
+                            src={shot.url}
+                            muted
+                            playsInline
+                            preload="metadata"
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <img
+                            src={shot.url}
+                            alt={`${style.title} shot #${shot.n}`}
+                            className="h-full w-full object-cover"
+                            loading="lazy"
+                          />
+                        )}
                         <span className="absolute bottom-1 left-1 rounded bg-background/85 px-1.5 py-0.5 text-[10px] font-mono">
-                          #{shot.n}
+                          {shot.kind === "video" ? "▶" : `#${shot.n}`}
                         </span>
                       </button>
                     )
