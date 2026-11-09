@@ -15,6 +15,16 @@ IMAGE_SUFFIXES: Tuple[str, ...] = (".jpg", ".jpeg", ".png", ".webp", ".avif", ".
 
 COLLECTION_DEFINITIONS: List[Dict[str, Any]] = [
     {
+        "id": "lnc-style",
+        "name": "LNC Style",
+        "description": "In-house lengoc.me design systems — internal app shells, blueprint lite/full themes, LN UI Engine, and LNC-branded palettes.",
+        "kind": "category",
+        "accent": "#5B2E63",
+        "keywords": [
+            "lnc", "lengoc", "ln ui engine", "paper-sketch",
+        ],
+    },
+    {
         "id": "editorial",
         "name": "Editorial & Publishing",
         "description": "High-contrast serif typography, magazine layouts, literary journals, and long-form reading experiences.",

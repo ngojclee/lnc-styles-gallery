@@ -39,7 +39,7 @@ function LicensesPage() {
   }, [data?.attributed_sources_sample, filterText])
 
   return (
-    <main className="flex-1 space-y-6 p-6">
+    <main className="flex-1 space-y-6">
       <PageHeader
         icon={Scale}
         title="Licenses & Source Attributions"

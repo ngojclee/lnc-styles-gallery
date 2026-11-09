@@ -46,9 +46,11 @@ function RootLayout() {
         <AppSidebar />
         <SidebarInset>
           <AppHeader />
-          <div className="flex flex-1 flex-col">
-            <Outlet />
-          </div>
+          <main className="@container/main flex min-w-0 flex-1 flex-col px-4 pt-4 pb-10 sm:px-6 md:px-8">
+            <div className="mx-auto flex min-w-0 w-full max-w-7xl flex-1 flex-col gap-4 md:gap-6">
+              <Outlet />
+            </div>
+          </main>
         </SidebarInset>
       </SidebarProvider>
       <Toaster richColors closeButton position="bottom-right" />

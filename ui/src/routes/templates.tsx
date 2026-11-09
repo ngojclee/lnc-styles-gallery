@@ -98,7 +98,7 @@ function TemplatesPage() {
   }
 
   return (
-    <main className="flex-1 space-y-6 p-6">
+    <main className="flex-1 space-y-6">
       <PageHeader
         icon={FileCode2}
         title="Prompt-Driven HTML Templates"

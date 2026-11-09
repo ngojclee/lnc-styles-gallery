@@ -373,13 +373,15 @@ export function StyleDetailDialog({ styleId, open, onOpenChange }: StyleDetailDi
                   <span>Click image to zoom</span>
                 </div>
                 {activeImageUrl ? (
-                  <ZoomViewport
-                    imageUrl={activeImageUrl}
-                    alt={style.title}
-                    contentWidth={1280}
-                    contentHeight={800}
-                    className="border border-border/70 shadow-sm"
-                  />
+                  <div className="h-[320px] sm:h-[400px]">
+                    <ZoomViewport
+                      imageUrl={activeImageUrl}
+                      alt={style.title}
+                      contentWidth={1280}
+                      contentHeight={800}
+                      className="border border-border/70 shadow-sm"
+                    />
+                  </div>
                 ) : null}
               </div>
 
