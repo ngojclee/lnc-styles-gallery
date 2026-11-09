@@ -29,6 +29,10 @@ function RootLayout() {
         navigate({ to: "/collections" })
       } else if (rawHash === "templates") {
         navigate({ to: "/templates" })
+      } else if (rawHash === "components") {
+        navigate({ to: "/components" })
+      } else if (rawHash === "platforms") {
+        navigate({ to: "/platforms" })
       } else if (rawHash === "licenses") {
         navigate({ to: "/licenses" })
       } else if (rawHash === "admin") {
