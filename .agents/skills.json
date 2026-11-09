@@ -1,0 +1,15 @@
+{
+  "project": "lnc-styles-gallery",
+  "description": "LNC Style Library — internal gallery, REST API, and Streamable HTTP MCP server for Refero design styles and prompt-driven-ui HTML templates.",
+  "skills": [
+    "lnc-skill-index",
+    "lnc-internal-app-blueprint",
+    "lnm-style-library",
+    "release-portainer-app",
+    "dev-backend-iris",
+    "dev-frontend-luna",
+    "architect-zen",
+    "planner-alex",
+    "reviewer-kai"
+  ]
+}

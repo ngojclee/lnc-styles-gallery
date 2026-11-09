@@ -1,0 +1,33 @@
+version: "3.8"
+
+# LNC Style Library (styles.lengoc.me)
+#   Web: http://<host>:8460  (container 8000)
+#   Data: bind ${DATA_DIR}/lnc-styles-gallery -> /data (read-only corpus)
+#         corpus = refero-styles/ + prompt-driven-ui/ synced from
+#         \\10.21.2.2\data\_agentsync\repos\ (script scripts/sync_data_from_nas.bat)
+#   Env: STYLES_API_KEY (admin reindex auth, optional), TZ, DATA_DIR
+
+services:
+  lnc-styles-gallery:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: lnc-styles-gallery
+    restart: unless-stopped
+    ports:
+      - "8460:8000"
+    environment:
+      - PORT=8000
+      - STYLES_DATA_DIR=/data
+      - STYLES_PUBLIC_URL=https://styles.lengoc.me
+      - STYLES_API_KEY=${STYLES_API_KEY:-}
+      - TZ=${TZ:-Europe/Paris}
+      - ALLOWED_HOSTS=*
+    volumes:
+      - ${DATA_DIR:-/home/Docker}/lnc-styles-gallery:/data:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

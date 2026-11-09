@@ -1,0 +1,9 @@
+.git
+.gitignore
+data/
+.venv/
+__pycache__/
+*.pyc
+.docs/
+.agents/
+node_modules/

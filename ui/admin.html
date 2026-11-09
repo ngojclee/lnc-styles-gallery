@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin — LNC Style Library</title>
+  <link rel="stylesheet" href="/ui/styles.css" />
+</head>
+<body>
+  <header class="top-header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-logo">S</div>
+        <div>
+          <div class="brand-title">LNC Style Library &bull; Admin</div>
+          <div class="brand-subtitle">Corpus Status, Masked Settings &amp; Live Re-Indexer</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <a class="btn" href="/#styles">&larr; Back to Gallery</a>
+        <button class="btn btn-primary" id="admin-reindex-btn">&#x21bb; Trigger Re-Index</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <div class="license-box">
+      <h2 style="font-size:1.15rem;margin-bottom:0.75rem;">Corpus &amp; Index Diagnostics</h2>
+      <pre class="raw-pre" id="admin-corpus-json">Loading...</pre>
+    </div>
+
+    <div class="license-box">
+      <h2 style="font-size:1.15rem;margin-bottom:0.75rem;">Runtime Settings (Masked)</h2>
+      <pre class="raw-pre" id="admin-settings-json">Loading...</pre>
+    </div>
+  </main>
+
+  <script>
+    async function refreshAdmin() {
+      const res = await fetch("/api/admin/settings");
+      const data = await res.json();
+      document.getElementById("admin-corpus-json").textContent = JSON.stringify(data.corpus, null, 2);
+      document.getElementById("admin-settings-json").textContent = JSON.stringify(data.settings, null, 2);
+    }
+    document.getElementById("admin-reindex-btn").addEventListener("click", async () => {
+      const btn = document.getElementById("admin-reindex-btn");
+      btn.disabled = true;
+      btn.textContent = "Re-indexing...";
+      await fetch("/api/admin/reindex", { method: "POST" });
+      await refreshAdmin();
+      btn.disabled = false;
+      btn.innerHTML = "&#x21bb; Trigger Re-Index";
+    });
+    refreshAdmin();
+  </script>
+</body>
+</html>
