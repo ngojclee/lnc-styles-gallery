@@ -14,3 +14,6 @@ _pose-ui-ref/
 _pose-ui-src/
 temp_scripts/node_modules/
 data-runtime/
+
+# but keep example env templates
+!.env.example
