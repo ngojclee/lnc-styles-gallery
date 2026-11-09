@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as CollectionsRouteImport } from './routes/collections'
 import { Route as ComponentsRouteImport } from './routes/components'
+import { Route as KeysRouteImport } from './routes/keys'
 import { Route as LicensesRouteImport } from './routes/licenses'
 import { Route as PlatformsRouteImport } from './routes/platforms'
 import { Route as StylesRouteImport } from './routes/styles'
@@ -36,6 +37,11 @@ const CollectionsRoute = CollectionsRouteImport.update({
 const ComponentsRoute = ComponentsRouteImport.update({
   id: '/components',
   path: '/components',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const KeysRoute = KeysRouteImport.update({
+  id: '/keys',
+  path: '/keys',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LicensesRoute = LicensesRouteImport.update({
@@ -64,6 +70,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRoute
   '/collections': typeof CollectionsRoute
   '/components': typeof ComponentsRoute
+  '/keys': typeof KeysRoute
   '/licenses': typeof LicensesRoute
   '/platforms': typeof PlatformsRoute
   '/styles': typeof StylesRoute
@@ -74,6 +81,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminRoute
   '/collections': typeof CollectionsRoute
   '/components': typeof ComponentsRoute
+  '/keys': typeof KeysRoute
   '/licenses': typeof LicensesRoute
   '/platforms': typeof PlatformsRoute
   '/styles': typeof StylesRoute
@@ -85,6 +93,7 @@ export interface FileRoutesById {
   '/admin': typeof AdminRoute
   '/collections': typeof CollectionsRoute
   '/components': typeof ComponentsRoute
+  '/keys': typeof KeysRoute
   '/licenses': typeof LicensesRoute
   '/platforms': typeof PlatformsRoute
   '/styles': typeof StylesRoute
@@ -97,6 +106,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/collections'
     | '/components'
+    | '/keys'
     | '/licenses'
     | '/platforms'
     | '/styles'
@@ -107,6 +117,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/collections'
     | '/components'
+    | '/keys'
     | '/licenses'
     | '/platforms'
     | '/styles'
@@ -117,6 +128,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/collections'
     | '/components'
+    | '/keys'
     | '/licenses'
     | '/platforms'
     | '/styles'
@@ -128,6 +140,7 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRoute
   CollectionsRoute: typeof CollectionsRoute
   ComponentsRoute: typeof ComponentsRoute
+  KeysRoute: typeof KeysRoute
   LicensesRoute: typeof LicensesRoute
   PlatformsRoute: typeof PlatformsRoute
   StylesRoute: typeof StylesRoute
@@ -162,6 +175,13 @@ declare module '@tanstack/react-router' {
       path: '/components'
       fullPath: '/components'
       preLoaderRoute: typeof ComponentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/keys': {
+      id: '/keys'
+      path: '/keys'
+      fullPath: '/keys'
+      preLoaderRoute: typeof KeysRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/licenses': {
@@ -200,6 +220,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRoute,
   CollectionsRoute: CollectionsRoute,
   ComponentsRoute: ComponentsRoute,
+  KeysRoute: KeysRoute,
   LicensesRoute: LicensesRoute,
   PlatformsRoute: PlatformsRoute,
   StylesRoute: StylesRoute,

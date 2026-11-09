@@ -28,6 +28,8 @@ class Settings:
         self.public_url: str = os.environ.get("STYLES_PUBLIC_URL", "https://styles.lengoc.me")
         self.api_key: str = os.environ.get("STYLES_API_KEY", os.environ.get("ADMIN_API_KEY", "")).strip()
         self.data_dir: Path = Path(os.environ.get("STYLES_DATA_DIR", str(ROOT_DIR / "data")))
+        self.config_dir: Path = Path(os.environ.get("STYLES_CONFIG_DIR", str(ROOT_DIR / "data-runtime")))
+        self.mcp_auth_required: bool = os.environ.get("STYLES_MCP_AUTH", "").lower() in ("1", "true", "yes")
         self._refero_override: str = os.environ.get("REFERO_STYLES_DIR", "").strip()
         self._prompt_ui_override: str = os.environ.get("PROMPT_UI_DIR", "").strip()
         self._components_override: str = os.environ.get("COMPONENTS_DIR", "").strip()
@@ -95,6 +97,8 @@ class Settings:
             "refero_styles_dir": str(refero_dir),
             "prompt_ui_dir": str(prompt_ui_dir),
             "components_dir": str(components_dir),
+            "config_dir": str(self.config_dir),
+            "mcp_auth_required": self.mcp_auth_required,
             "auth_mode": "api_key" if self.api_key else "internal_open",
             "api_key_configured": bool(self.api_key),
             "api_key_masked": ("***" + self.api_key[-4:]) if len(self.api_key) > 4 else ("***" if self.api_key else ""),

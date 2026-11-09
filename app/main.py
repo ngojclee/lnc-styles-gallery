@@ -5,13 +5,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from app.config import ROOT_DIR, settings
-from app.mcp_server import mcp_router
+from app.key_service import key_service
+from app.mcp_server import MCP_TOOLS_SCHEMA, mcp_router
 from app.store import store
 
 # FileResponse guesses content-type via mimetypes — Alpine's table lacks these
@@ -55,6 +57,26 @@ app.add_middleware(
 )
 
 app.include_router(mcp_router)
+
+
+@app.middleware("http")
+async def mcp_auth_middleware(request: Request, call_next):
+    """Optional Bearer-token gate for /mcp — enabled via STYLES_MCP_AUTH=1."""
+    if settings.mcp_auth_required and request.url.path.startswith("/mcp"):
+        auth_header = request.headers.get("authorization", "")
+        token = ""
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+        elif "token" in request.query_params:
+            token = request.query_params["token"]
+        if not key_service.validate_key(token):
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": "Bearer token required for /mcp. Provide Authorization: Bearer <styles_...> token."
+                },
+            )
+    return await call_next(request)
 
 
 def verify_admin_auth(
@@ -372,6 +394,68 @@ async def api_licenses() -> Dict[str, Any]:
     return store.get_licenses()
 
 
+class CreateKeyRequest(BaseModel):
+    label: str
+    custom_secret: Optional[str] = None
+
+
+class RotateKeyRequest(BaseModel):
+    custom_secret: Optional[str] = None
+
+
+class RevokeKeyRequest(BaseModel):
+    revoke: Optional[bool] = True
+
+
+@app.get("/api/keys")
+async def api_list_keys() -> Dict[str, Any]:
+    return {"ok": True, "keys": key_service.list_keys(), "api_key_configured": bool(settings.api_key)}
+
+
+@app.post("/api/keys", dependencies=[Depends(verify_admin_auth)])
+async def api_create_key(payload: CreateKeyRequest) -> Dict[str, Any]:
+    entry = key_service.create_key(label=payload.label, custom_secret=payload.custom_secret)
+    return {"ok": True, "key": entry["key"], "item": entry}
+
+
+@app.post("/api/keys/{key_id}/revoke", dependencies=[Depends(verify_admin_auth)])
+async def api_revoke_key(key_id: str, payload: Optional[RevokeKeyRequest] = None) -> Dict[str, Any]:
+    revoke_val = payload.revoke if payload is not None and payload.revoke is not None else True
+    item = key_service.revoke_key(key_id, revoke=revoke_val)
+    if not item:
+        raise HTTPException(status_code=404, detail="Key not found")
+    return {"ok": True, "message": f"Key {'revoked' if revoke_val else 'reactivated'}", "item": item}
+
+
+@app.post("/api/keys/{key_id}/rotate", dependencies=[Depends(verify_admin_auth)])
+async def api_rotate_key(key_id: str, payload: Optional[RotateKeyRequest] = None) -> Dict[str, Any]:
+    item = key_service.rotate_key(key_id, custom_secret=payload.custom_secret if payload else None)
+    if not item:
+        raise HTTPException(status_code=404, detail="Key not found")
+    return {"ok": True, "key": item["key"], "item": item, "message": "Key rotated successfully"}
+
+
+@app.delete("/api/keys/{key_id}", dependencies=[Depends(verify_admin_auth)])
+async def api_delete_key(key_id: str) -> Dict[str, Any]:
+    if not key_service.delete_key(key_id):
+        raise HTTPException(status_code=404, detail="Key not found")
+    return {"ok": True, "message": "Key permanently deleted"}
+
+
+@app.get("/api/mcp/info")
+async def api_mcp_info() -> Dict[str, Any]:
+    return {
+        "endpoint": f"{settings.public_url.rstrip('/')}/mcp",
+        "namespace": "styles__*",
+        "transport": "Streamable HTTP JSON-RPC 2.0 & SSE",
+        "auth_required": settings.mcp_auth_required,
+        "auth_mode": "bearer" if settings.mcp_auth_required else "open",
+        "tools": [{"name": t["name"], "description": t.get("description", "")} for t in MCP_TOOLS_SCHEMA],
+        "tools_count": len(MCP_TOOLS_SCHEMA),
+        "keys_count": len(key_service.list_keys()),
+    }
+
+
 @app.post("/api/admin/reindex", dependencies=[Depends(verify_admin_auth)])
 @app.get("/api/admin/reindex", dependencies=[Depends(verify_admin_auth)])
 async def api_admin_reindex() -> Dict[str, Any]:
@@ -430,6 +514,7 @@ if UI_DIR.exists():
 @app.get("/templates", response_class=HTMLResponse)
 @app.get("/components", response_class=HTMLResponse)
 @app.get("/platforms", response_class=HTMLResponse)
+@app.get("/keys", response_class=HTMLResponse)
 @app.get("/licenses", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 async def serve_spa_index() -> Response:

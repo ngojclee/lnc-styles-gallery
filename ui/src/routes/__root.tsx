@@ -33,6 +33,8 @@ function RootLayout() {
         navigate({ to: "/components" })
       } else if (rawHash === "platforms") {
         navigate({ to: "/platforms" })
+      } else if (rawHash === "keys") {
+        navigate({ to: "/keys" })
       } else if (rawHash === "licenses") {
         navigate({ to: "/licenses" })
       } else if (rawHash === "admin") {

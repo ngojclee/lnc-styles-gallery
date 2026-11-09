@@ -21,10 +21,13 @@ services:
       - STYLES_DATA_DIR=/data
       - STYLES_PUBLIC_URL=https://styles.lengoc.me
       - STYLES_API_KEY=${STYLES_API_KEY:-}
+      - STYLES_MCP_AUTH=${STYLES_MCP_AUTH:-}
+      - STYLES_CONFIG_DIR=/config
       - TZ=${TZ:-Europe/Paris}
       - ALLOWED_HOSTS=*
     volumes:
       - ${DATA_DIR:-/home/Docker}/lnc-styles-gallery:/data:ro
+      - ${DATA_DIR:-/home/Docker}/lnc-styles-gallery-config:/config
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\" || exit 1"]
       interval: 30s

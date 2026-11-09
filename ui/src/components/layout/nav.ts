@@ -2,6 +2,7 @@ import {
   Blocks,
   FileCode2,
   FolderKanban,
+  KeyRound,
   MonitorSmartphone,
   Palette,
   Scale,
@@ -10,7 +11,7 @@ import {
 
 export interface NavItem {
   title: string
-  to: "/" | "/styles" | "/collections" | "/templates" | "/components" | "/platforms" | "/licenses" | "/admin"
+  to: "/" | "/styles" | "/collections" | "/templates" | "/components" | "/platforms" | "/licenses" | "/keys" | "/admin"
   icon: typeof Palette
   description: string
   badgeKey?: "styles_count" | "collections_count" | "templates_count" | "components_count"
@@ -64,6 +65,12 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Governance & Ops",
     items: [
+      {
+        title: "API Keys & MCP",
+        to: "/keys",
+        icon: KeyRound,
+        description: "Bearer tokens, FastMCP endpoint & Hub integration",
+      },
       {
         title: "Licenses & Sources",
         to: "/licenses",
