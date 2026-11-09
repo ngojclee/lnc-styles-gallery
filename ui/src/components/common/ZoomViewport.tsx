@@ -71,12 +71,6 @@ function ZoomSurface({ imageUrl, alt = 'Image Preview', children, contentWidth =
     return { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2, distance: Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) }
   }
   return <div className={cn('flex h-full min-h-0 w-full flex-col gap-2', className)}>
-    <div className="flex shrink-0 flex-wrap items-center justify-center gap-2" aria-label="Image zoom controls">
-      <Button type="button" variant="outline" className="min-h-11 min-w-11" aria-label="Zoom out" disabled={view.zoom <= 1} onClick={() => zoomAt(current.current.zoom / 1.25)}><MinusIcon className="size-4" /></Button>
-      <span className="min-w-16 text-center text-sm tabular-nums" aria-live="polite">{Math.round(view.zoom * 100)}%</span>
-      <Button type="button" variant="outline" className="min-h-11 min-w-11" aria-label="Zoom in" disabled={view.zoom >= 8} onClick={() => zoomAt(current.current.zoom * 1.25)}><PlusIcon className="size-4" /></Button>
-      <Button type="button" variant="outline" className="min-h-11" onClick={reset}><RotateCcwIcon className="size-4" />Fit</Button>
-    </div>
     <div ref={viewport} tabIndex={0} role="region" aria-label={`${alt}; +/- to zoom, arrows to pan, 0 to reset`}
       className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-muted/60 outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring"
       style={{ touchAction: 'none', cursor: view.zoom > 1 ? 'grab' : 'default' }}
@@ -107,6 +101,13 @@ function ZoomSurface({ imageUrl, alt = 'Image Preview', children, contentWidth =
       onPointerUp={(e) => { pointers.current.delete(e.pointerId); previous.current = gesture() }}
       onPointerCancel={(e) => { pointers.current.delete(e.pointerId); previous.current = gesture() }}
       onLostPointerCapture={(e) => { pointers.current.delete(e.pointerId); previous.current = gesture() }}>
+      <div className="absolute left-1/2 top-2.5 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full border border-border/60 bg-background/85 px-1.5 py-1 shadow-md backdrop-blur-sm"
+        aria-label="Image zoom controls" onPointerDown={(e) => e.stopPropagation()}>
+        <Button type="button" variant="ghost" className="size-8" aria-label="Zoom out" disabled={view.zoom <= 1} onClick={() => zoomAt(current.current.zoom / 1.25)}><MinusIcon className="size-4" /></Button>
+        <span className="min-w-12 text-center text-xs tabular-nums" aria-live="polite">{Math.round(view.zoom * 100)}%</span>
+        <Button type="button" variant="ghost" className="size-8" aria-label="Zoom in" disabled={view.zoom >= 8} onClick={() => zoomAt(current.current.zoom * 1.25)}><PlusIcon className="size-4" /></Button>
+        <Button type="button" variant="ghost" className="h-8 gap-1 px-2.5 text-xs" onClick={reset}><RotateCcwIcon className="size-3.5" />Fit</Button>
+      </div>
       <div className="pointer-events-none absolute top-1/2 left-1/2 origin-center select-none" style={{ width: natural.width, height: natural.height, transform: `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) scale(${fit * view.zoom})` }}>
         {children ?? (imageUrl && !imageFailed && <img src={imageUrl} alt={alt} draggable={false} className="h-full w-full object-contain" onError={() => setImageFailed(true)} onLoad={(e) => { setNatural({ width: e.currentTarget.naturalWidth || contentWidth, height: e.currentTarget.naturalHeight || contentHeight }); reset() }} />)}
       </div>
