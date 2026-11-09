@@ -3,7 +3,7 @@ FROM node:20-alpine AS ui-builder
 
 WORKDIR /ui
 COPY ui/package.json ui/pnpm-lock.yaml* ./
-RUN corepack enable && pnpm install --no-frozen-lockfile
+RUN corepack enable && pnpm install --frozen-lockfile
 COPY ui/ ./
 RUN pnpm build
 
