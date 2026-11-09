@@ -57,7 +57,8 @@ The backend reads two read-only corpora. By default it checks `./data/` first an
    - `styles/<uuid>/DESIGN.md` — ~20KB Markdown design system guide (color tokens, typography, spacing, border radius, layout, do/don't rules)
    - `styles/<uuid>/meta.json` — Additional per-style metadata (including optional `"preview"` and `"shots"` arrays)
    - `styles/<uuid>/preview.<ext>` — Hero screenshot (`og:image` of Refero page)
-   - `styles/<uuid>/shots/NN.<ext>` — Up to 8 gallery screenshots per style
+   - `styles/<uuid>/shots/NN.<ext>` — Up to 8 gallery screenshots per style (**images only — video shots deliberately skipped**; `harvest_images.py` drops `mp4/webm/mov` via `VIDEO_EXTS` to keep the corpus lightweight)
+   - `styles/<special-id>/` — Non-UUID entries: 6 `lnc-*`/`ln-*` LNC-owned themes + 15 official **Platform Design Systems** (`apple-hig`, `material-design-3`, `microsoft-fluent-2`, `ibm-carbon`, `shopify-polaris`, `atlassian-design`, `github-primer`, `ant-design`, `salesforce-lightning`, `uswds`, `govuk-design`, `shadcn-ui`, `radix-themes`, `tailwind-default`, `bootstrap-5`) whose `meta.json` declares `"categories": ["platform-system"]` (takes precedence over keyword classification)
    - `sitemaps/collections.xml` — Optional sitemap collections metadata (when present)
 
 2. **Prompt-Driven UI Corpus** (`data/prompt-driven-ui` or `\\10.21.2.2\data\_agentsync\repos\prompt-driven-ui`)
