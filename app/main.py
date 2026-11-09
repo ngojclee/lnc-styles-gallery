@@ -340,6 +340,14 @@ async def api_get_component_html(component_id: str) -> Response:
     return HTMLResponse(content=file_path.read_text(encoding="utf-8", errors="replace"))
 
 
+@app.get("/api/components/{component_id}/preview")
+async def api_get_component_preview(component_id: str) -> Response:
+    file_path = store.get_component_preview_path(component_id)
+    if not file_path:
+        raise HTTPException(status_code=404, detail=f"Component has no preview: {component_id}")
+    return FileResponse(file_path)
+
+
 @app.get("/api/components/{component_id}/files/{filename:path}")
 async def api_get_component_file(component_id: str, filename: str) -> Response:
     file_path = store.get_component_file_path(component_id, filename)

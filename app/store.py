@@ -711,6 +711,17 @@ class StyleLibraryStore:
             html_path = item_dir / entry
             has_html = kind == "html" and html_path.exists()
 
+            has_preview = False
+            try:
+                for p in item_dir.iterdir():
+                    if p.is_file() and p.stem.lower() == "preview" and p.suffix.lower() in (
+                        ".webp", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+                    ):
+                        has_preview = True
+                        break
+            except Exception:
+                pass
+
             # Collect source files present on disk (for tsx/code entries)
             files: List[str] = []
             declared = item.get("files")
@@ -742,6 +753,8 @@ class StyleLibraryStore:
                 "files": files,
                 "has_html": has_html,
                 "html_url": f"/api/components/{comp_id}/html" if has_html else None,
+                "has_preview": has_preview,
+                "preview_url": f"/api/components/{comp_id}/preview" if has_preview else None,
                 "_dir": str(item_dir),
                 "_entry": entry,
             }
@@ -835,6 +848,23 @@ class StyleLibraryStore:
                     continue
             result["sources"] = sources
         return result
+
+    def get_component_preview_path(self, component_id: str) -> Optional[Path]:
+        self._ensure_indexed()
+        with self._lock:
+            comp = self.components_by_id.get(component_id)
+            if not comp:
+                return None
+            item_dir = Path(comp.get("_dir", ""))
+        try:
+            for p in item_dir.iterdir():
+                if p.is_file() and p.stem.lower() == "preview" and p.suffix.lower() in (
+                    ".webp", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+                ):
+                    return p
+        except Exception:
+            pass
+        return None
 
     def get_component_file_path(self, component_id: str, filename: str) -> Optional[Path]:
         self._ensure_indexed()

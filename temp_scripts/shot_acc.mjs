@@ -1,0 +1,11 @@
+import { chromium } from 'playwright-core';
+const b = await chromium.launch();
+const pg = await (await b.newContext({ viewport: { width: 1200, height: 800 } })).newPage();
+await pg.goto('https://ui.knowns.dev/docs/accordion', { waitUntil: 'domcontentloaded', timeout: 40000 });
+await pg.waitForTimeout(4000);
+const el = pg.locator('[role="tabpanel"]').first();
+await el.scrollIntoViewIfNeeded();
+await pg.waitForTimeout(800);
+await el.screenshot({ path: 'acc-preview.png' });
+console.log('done');
+await b.close();

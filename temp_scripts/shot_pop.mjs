@@ -1,0 +1,11 @@
+import { chromium } from 'playwright-core';
+const b = await chromium.launch();
+const pg = await (await b.newContext({ viewport: { width: 1200, height: 675 } })).newPage();
+await pg.goto('https://ui.knowns.dev/docs/popover', { waitUntil: 'domcontentloaded', timeout: 40000 });
+await pg.waitForTimeout(3500);
+const panel = pg.locator('[role="tabpanel"]').first();
+await panel.scrollIntoViewIfNeeded();
+await panel.locator('button').first().click();
+await pg.waitForTimeout(1600);
+await pg.screenshot({ path: 'pop-preview.png' });
+await b.close();

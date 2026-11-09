@@ -237,7 +237,14 @@ function ComponentsPage() {
               className="group cursor-pointer gap-0 overflow-hidden p-0 transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-lg"
             >
               <div className="relative aspect-[16/9] w-full overflow-hidden border-b border-border/60 bg-zinc-950">
-                {c.has_html && c.html_url ? (
+                {c.has_preview && c.preview_url ? (
+                  <img
+                    src={c.preview_url}
+                    alt={c.name}
+                    loading="lazy"
+                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+                  />
+                ) : c.has_html && c.html_url ? (
                   <iframe
                     src={c.html_url}
                     title={c.name}
@@ -368,9 +375,18 @@ function ComponentsPage() {
                     <Skeleton className="h-64 w-full rounded-xl" />
                   </div>
                 ) : (
-                  <pre className="overflow-x-auto rounded-xl border border-border/70 bg-card p-5 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground">
-                    {sourceText || "No source files on disk for this component."}
-                  </pre>
+                  <>
+                    {selected?.has_preview && selected.preview_url ? (
+                      <img
+                        src={selected.preview_url}
+                        alt={selected.name}
+                        className="mb-4 w-full rounded-xl border border-border/70"
+                      />
+                    ) : null}
+                    <pre className="overflow-x-auto rounded-xl border border-border/70 bg-card p-5 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground">
+                      {sourceText || "No source files on disk for this component."}
+                    </pre>
+                  </>
                 )}
               </div>
             )}

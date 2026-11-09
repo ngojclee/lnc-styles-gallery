@@ -110,6 +110,8 @@ export interface ComponentItem {
   files: string[]
   has_html: boolean
   html_url: string | null
+  has_preview: boolean
+  preview_url: string | null
 }
 
 export interface ComponentDetail extends ComponentItem {
