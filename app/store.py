@@ -152,10 +152,10 @@ COLLECTION_DEFINITIONS: List[Dict[str, Any]] = [
         "accent": "#0ea5e9",
         "keywords": [
             "human interface", "material you", "material design", "fluent design", "fluent2",
-            "carbon design", "carbondesignsystem", "polaris", "atlassian", "primer.style",
+            "carbon design", "carbondesignsystem", "polaris", "primer.style",
             "ant design", "ant.design", "lightning design", "lightningdesignsystem",
             "uswds", "digital.gov", "gov.uk", "govuk", "shadcn", "radix",
-            "tailwind", "bootstrap",
+            "bootstrap",
         ],
     },
 ]
