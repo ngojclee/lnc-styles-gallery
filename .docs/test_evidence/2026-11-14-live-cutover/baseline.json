@@ -1,0 +1,55 @@
+{
+  "service": "lnc-styles-gallery",
+  "version": "1.0.0.0",
+  "cutover_at": "2026-11-14T06:07:25Z",
+  "environment": "production",
+  "host": "10.21.1.101",
+  "portainer_instance": "portainer-fr",
+  "portainer_stack_id": 53,
+  "previous_stack_id": 50,
+  "domain": "styles.lengoc.me",
+  "container_id": "4ebde1ee7e83",
+  "user": "10001:10001",
+  "compose_project": "lnc-styles-gallery",
+  "rollback_tags": [
+    "lnc-styles-gallery:rollback-20261114",
+    "lnc-styles-gallery-rollback:20261114"
+  ],
+  "config_backup": "/home/Docker/lnc-styles-gallery-config.bak-20261114",
+  "metrics": {
+    "before_python_rss_mib": 20.1,
+    "after_rust_rss_mib": 15.62,
+    "rss_delta_pct": -22.3,
+    "before_image_mb": 238.4,
+    "after_image_mb": 91.9,
+    "image_delta_pct": -61.5,
+    "index_duration_ms": 514,
+    "styles_count": 1363,
+    "templates_count": 100,
+    "components_count": 199
+  },
+  "checks": {
+    "container_healthy": true,
+    "health_http_status": 200,
+    "health_version": "1.0.0.0",
+    "security_headers_present": [
+      "x-content-type-options",
+      "x-frame-options",
+      "referrer-policy",
+      "content-security-policy"
+    ],
+    "login_html_status": 200,
+    "auth_status_oidc_enabled": true,
+    "oidc_login_redirect_status": 302,
+    "oidc_pkce_method": "S256",
+    "oidc_keycloak_page_status": 200,
+    "protected_api_keys_unauth_status": 401,
+    "protected_admin_reindex_unauth_status": 401,
+    "mcp_unauth_status": 401,
+    "business_mcp_hub_cache_refresh": "ok (8 tools)",
+    "business_mcp_styles_list_styles": "ok (total=1363)",
+    "disk_keys_json_scrubbed": true
+  },
+  "total_score": 100.0,
+  "verdict": "LIVE_CUTOVER_VERIFIED"
+}

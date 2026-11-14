@@ -4,6 +4,7 @@
 - **Runtime**: Rust (`axum 0.8` + `tokio` + `reqwest` + `rustls`) + React 19 / Vite 8 / TanStack Router SPA
 - **Version**: `1.0.0.0` (legacy Python preserved in `app/*.py` and `Dockerfile.py`)
 - **Container / Host Port**: `8000` (`PORT` / `STYLES_PORT`) -> host `8460` (`https://styles.lengoc.me`)
+- **Live Production Cutover**: **DEPLOYED & VERIFIED** (`2026-11-14T06:07:25Z`) on `portainer-fr` Stack `53` (`10.21.1.101`, GitOps repo mode) — live `VmRSS` **`15.62 MiB`** (down from Python `20.1 MiB`), image **`91.9 MB`** (down from `238.4 MB`), Keycloak OIDC PKCE `S256` live, Hub `styles__list_styles` (`1363` styles) live -> [live scorecard](file:///D:/Python/projects/lnc-styles-gallery/.docs/test_evidence/2026-11-14-live-cutover/scorecard.md)
 - **Release Readiness (`/w18` Track M Scorecard)**: **`100.0 / 100`** (`23/23` E2E checks passed, `0` Critical/High/Medium/Low, Hard-Fail `CLEAR`, `RELEASE_READY`)
 
 ---
