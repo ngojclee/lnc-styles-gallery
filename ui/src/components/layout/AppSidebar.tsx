@@ -28,6 +28,22 @@ export function AppSidebar() {
     if (to === "/styles") {
       return pathname === "/" || pathname.startsWith("/styles")
     }
+    if (to === "/keys") {
+      return (
+        pathname === "/keys" ||
+        pathname.startsWith("/keys/") ||
+        pathname === "/api-keys" ||
+        pathname.startsWith("/api-keys/")
+      )
+    }
+    if (to === "/settings") {
+      return (
+        pathname === "/settings" ||
+        pathname.startsWith("/settings/") ||
+        pathname === "/admin" ||
+        pathname.startsWith("/admin/")
+      )
+    }
     return pathname === to || pathname.startsWith(`${to}/`)
   }
 

@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query"
+import { queryOptions, type QueryClient } from "@tanstack/react-query"
 import type {
   AdminSettingsResponse,
   AuthSessionResponse,
@@ -6,8 +6,12 @@ import type {
   CollectionItem,
   ComponentDetail,
   ComponentsListResponse,
+  CopySecretResponse,
   CorpusStatus,
   LicensesResponse,
+  McpConnectorItem,
+  McpConnectorsListResponse,
+  McpConnectorTestResponse,
   PublicApiKeyItem,
   SearchResponse,
   StyleDetail,
@@ -16,6 +20,8 @@ import type {
   TemplateDetail,
   TemplatesListResponse,
 } from "@/types/styles"
+
+let inMemoryCsrfToken: string | null = null
 
 export class ApiHttpError extends Error {
   status: number
@@ -28,11 +34,16 @@ export class ApiHttpError extends Error {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase()
+  const isStateChanging = method !== "GET" && method !== "HEAD" && method !== "OPTIONS"
+  const csrfHeaders: Record<string, string> =
+    isStateChanging && inMemoryCsrfToken ? { "X-CSRF-Token": inMemoryCsrfToken } : {}
   const res = await fetch(url, {
     credentials: "same-origin",
     ...init,
     headers: {
       Accept: "application/json",
+      ...csrfHeaders,
       ...(init?.headers ?? {}),
     },
   })
@@ -170,6 +181,17 @@ export async function fetchAdminSettings(): Promise<AdminSettingsResponse> {
   return fetchJson<AdminSettingsResponse>("/api/admin/settings")
 }
 
+export async function updateAdminSettings(payload: {
+  public_url?: string
+  public_base_url?: string
+}): Promise<AdminSettingsResponse> {
+  return fetchJson<AdminSettingsResponse>("/api/admin/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function triggerReindex(): Promise<{ status: string; summary: CorpusStatus }> {
   return fetchJson<{ status: string; summary: CorpusStatus }>("/api/admin/reindex", {
     method: "POST",
@@ -177,7 +199,9 @@ export async function triggerReindex(): Promise<{ status: string; summary: Corpu
 }
 
 export async function fetchAuthSession(): Promise<AuthSessionResponse> {
-  return fetchJson<AuthSessionResponse>("/api/auth/session")
+  const res = await fetchJson<AuthSessionResponse>("/api/auth/session")
+  inMemoryCsrfToken = res.authenticated ? (res.csrf_token ?? null) : null
+  return res
 }
 
 export async function loginWithManagementKey(key: string): Promise<{
@@ -185,18 +209,36 @@ export async function loginWithManagementKey(key: string): Promise<{
   authenticated: boolean
   mode: string
   session_epoch: number
+  csrf_token?: string
 }> {
-  return fetchJson("/api/auth/login", {
+  const res = await fetchJson<{
+    ok: boolean
+    authenticated: boolean
+    mode: string
+    session_epoch: number
+    csrf_token?: string
+  }>("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ key }),
   })
+  inMemoryCsrfToken = res.csrf_token ?? null
+  return res
 }
 
 export async function logoutSession(): Promise<{ ok: boolean; authenticated: boolean }> {
-  return fetchJson("/api/auth/logout", {
+  if (!inMemoryCsrfToken) {
+    await fetchAuthSession().catch(() => null)
+  }
+  const csrfHeaders: Record<string, string> = inMemoryCsrfToken
+    ? { "X-CSRF-Token": inMemoryCsrfToken }
+    : {}
+  const out = await fetchJson<{ ok: boolean; authenticated: boolean }>("/api/auth/logout", {
     method: "POST",
+    headers: csrfHeaders,
   })
+  inMemoryCsrfToken = null
+  return out
 }
 
 export async function revokeAllSessions(): Promise<{
@@ -204,23 +246,47 @@ export async function revokeAllSessions(): Promise<{
   revoked: boolean
   session_epoch: number
 }> {
-  return fetchJson("/api/auth/revoke-all", {
+  const out = await fetchJson<{
+    ok: boolean
+    revoked: boolean
+    session_epoch: number
+  }>("/api/auth/revoke-all", {
     method: "POST",
   })
+  inMemoryCsrfToken = null
+  return out
 }
 
 export async function fetchApiKeysList(): Promise<{ ok: boolean; keys: PublicApiKeyItem[] }> {
-  return fetchJson<{ ok: boolean; keys: PublicApiKeyItem[] }>("/api/keys")
+  return fetchJson<{ ok: boolean; keys: PublicApiKeyItem[] }>("/api/admin/api-keys")
 }
 
 export async function createApiKey(payload: {
   label: string
   custom_secret?: string
+  scopes?: string[]
 }): Promise<{ ok: boolean; key: string; item: PublicApiKeyItem }> {
-  return fetchJson("/api/keys", {
+  return fetchJson("/api/admin/api-keys", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  })
+}
+
+export async function updateApiKey(
+  keyId: string,
+  payload: { label?: string; scopes?: string[] }
+): Promise<{ ok: boolean; item: PublicApiKeyItem }> {
+  return fetchJson(`/api/admin/api-keys/${encodeURIComponent(keyId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function copyApiKey(keyId: string): Promise<CopySecretResponse> {
+  return fetchJson<CopySecretResponse>(`/api/admin/api-keys/${encodeURIComponent(keyId)}/copy`, {
+    method: "POST",
   })
 }
 
@@ -229,7 +295,7 @@ export async function rotateApiKey(keyId: string): Promise<{
   key: string
   item: PublicApiKeyItem
 }> {
-  return fetchJson(`/api/keys/${encodeURIComponent(keyId)}/rotate`, {
+  return fetchJson(`/api/admin/api-keys/${encodeURIComponent(keyId)}/rotate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),
@@ -240,18 +306,94 @@ export async function setApiKeyRevoked(
   keyId: string,
   revoke: boolean
 ): Promise<{ ok: boolean; item: PublicApiKeyItem }> {
-  return fetchJson(`/api/keys/${encodeURIComponent(keyId)}/revoke`, {
+  return fetchJson(`/api/admin/api-keys/${encodeURIComponent(keyId)}/revoke`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ revoke }),
   })
 }
 
-export async function deleteApiKey(keyId: string): Promise<{ ok: boolean; deleted: string }> {
-  return fetchJson(`/api/keys/${encodeURIComponent(keyId)}`, {
+export async function deleteApiKey(keyId: string): Promise<{ ok: boolean; deleted?: string }> {
+  return fetchJson(`/api/admin/api-keys/${encodeURIComponent(keyId)}`, {
     method: "DELETE",
   })
 }
+
+export async function fetchMcpConnectors(): Promise<McpConnectorsListResponse> {
+  return fetchJson<McpConnectorsListResponse>("/api/admin/mcp-connectors")
+}
+
+export async function createMcpConnector(payload: {
+  name: string
+  audience?: string
+  scopes?: string[]
+  custom_secret?: string
+}): Promise<{ ok: boolean; secret: string; item: McpConnectorItem }> {
+  return fetchJson("/api/admin/mcp-connectors", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateMcpConnector(
+  id: string,
+  payload: { name?: string; audience?: string; scopes?: string[]; custom_secret?: string }
+): Promise<{ ok: boolean; item: McpConnectorItem }> {
+  return fetchJson(`/api/admin/mcp-connectors/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function copyMcpConnector(id: string): Promise<CopySecretResponse> {
+  return fetchJson<CopySecretResponse>(`/api/admin/mcp-connectors/${encodeURIComponent(id)}/copy`, {
+    method: "POST",
+  })
+}
+
+export async function rotateMcpConnector(id: string): Promise<{
+  ok: boolean
+  secret: string
+  item: McpConnectorItem
+}> {
+  return fetchJson(`/api/admin/mcp-connectors/${encodeURIComponent(id)}/rotate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  })
+}
+
+export async function setMcpConnectorRevoked(
+  id: string,
+  revoke: boolean
+): Promise<{ ok: boolean; item: McpConnectorItem }> {
+  return fetchJson(`/api/admin/mcp-connectors/${encodeURIComponent(id)}/revoke`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ revoke }),
+  })
+}
+
+export async function deleteMcpConnector(id: string): Promise<{ ok: boolean }> {
+  return fetchJson(`/api/admin/mcp-connectors/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  })
+}
+
+export async function testMcpConnector(id: string): Promise<McpConnectorTestResponse> {
+  return fetchJson<McpConnectorTestResponse>(
+    `/api/admin/mcp-connectors/${encodeURIComponent(id)}/test`,
+    { method: "POST" }
+  )
+}
+
+export const mcpConnectorsQuery = queryOptions({
+  queryKey: ["mcp-connectors"],
+  queryFn: fetchMcpConnectors,
+  retry: false,
+})
 
 export const authSessionQuery = queryOptions({
   queryKey: ["auth-session"],
@@ -276,3 +418,15 @@ export const licensesQuery = queryOptions({
   queryFn: fetchLicenses,
   staleTime: 60_000,
 })
+
+/** Synchronously clear protected query caches before session invalidation to prevent post-logout 401 console spam. */
+export function clearAuthSessionCache(queryClient: QueryClient): void {
+  queryClient.setQueryData<AuthSessionResponse>(authSessionQuery.queryKey, (old) =>
+    old
+      ? { ...old, authenticated: false, mode: null, sub: null, user: null, csrf_token: null }
+      : old
+  )
+  for (const key of [["admin-status"], ["admin-settings"], ["api-keys"], ["mcp-connectors"]]) {
+    queryClient.removeQueries({ queryKey: key })
+  }
+}

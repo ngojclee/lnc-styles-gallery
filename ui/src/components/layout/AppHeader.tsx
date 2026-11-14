@@ -14,6 +14,7 @@ import { toast } from "sonner"
 
 import {
   authSessionQuery,
+  clearAuthSessionCache,
   fetchStyles,
   healthQuery,
   logoutSession,
@@ -54,6 +55,22 @@ export function AppHeader() {
 
   const activeNav = NAV_GROUPS.flatMap((g) => g.items).find((item) => {
     if (item.to === "/styles") return pathname === "/" || pathname.startsWith("/styles")
+    if (item.to === "/keys") {
+      return (
+        pathname === "/keys" ||
+        pathname.startsWith("/keys/") ||
+        pathname === "/api-keys" ||
+        pathname.startsWith("/api-keys/")
+      )
+    }
+    if (item.to === "/settings") {
+      return (
+        pathname === "/settings" ||
+        pathname.startsWith("/settings/") ||
+        pathname === "/admin" ||
+        pathname.startsWith("/admin/")
+      )
+    }
     return pathname === item.to || pathname.startsWith(`${item.to}/`)
   })
 
@@ -98,7 +115,8 @@ export function AppHeader() {
     try {
       await logoutSession()
       setSessionDialogOpen(false)
-      await queryClient.invalidateQueries()
+      clearAuthSessionCache(queryClient)
+      await queryClient.invalidateQueries({ queryKey: authSessionQuery.queryKey })
       toast.success("Signed out")
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to sign out")
@@ -112,7 +130,8 @@ export function AppHeader() {
     try {
       const res = await revokeAllSessions()
       setSessionDialogOpen(false)
-      await queryClient.invalidateQueries()
+      clearAuthSessionCache(queryClient)
+      await queryClient.invalidateQueries({ queryKey: authSessionQuery.queryKey })
       toast.success(`All sessions revoked (epoch ${res.session_epoch})`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to revoke sessions")

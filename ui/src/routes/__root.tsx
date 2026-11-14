@@ -33,12 +33,21 @@ function RootLayout() {
         navigate({ to: "/components" })
       } else if (rawHash === "platforms") {
         navigate({ to: "/platforms" })
-      } else if (rawHash === "keys") {
-        navigate({ to: "/keys" })
       } else if (rawHash === "licenses") {
         navigate({ to: "/licenses" })
-      } else if (rawHash === "admin") {
-        navigate({ to: "/admin" })
+      } else if (rawHash === "keys" || rawHash === "api-keys") {
+        window.history.replaceState(null, "", "/keys")
+        navigate({ to: "/keys" })
+      } else if (
+        rawHash === "mcp-connectors" ||
+        rawHash === "mcp" ||
+        rawHash === "integrations"
+      ) {
+        window.history.replaceState(null, "", "/mcp-connectors")
+        navigate({ to: "/mcp-connectors" })
+      } else if (rawHash === "settings" || rawHash === "admin") {
+        window.history.replaceState(null, "", "/settings")
+        navigate({ to: "/settings" })
       }
     }
     syncHashRoute()
@@ -53,7 +62,7 @@ function RootLayout() {
         <SidebarInset>
           <AppHeader />
           <main className="@container/main flex min-w-0 flex-1 flex-col px-4 pt-4 pb-10 sm:px-6 md:px-8">
-            <div className="mx-auto flex min-w-0 w-full max-w-7xl flex-1 flex-col gap-4 md:gap-6">
+            <div className="mx-auto flex min-w-0 w-full max-w-none flex-1 flex-col gap-4 md:gap-6">
               <Outlet />
             </div>
           </main>

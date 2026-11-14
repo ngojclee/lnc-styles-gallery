@@ -39,6 +39,45 @@ pub const RENEW_AFTER_SECS: i64 = 900;
 pub const OIDC_TX_TTL_SECS: i64 = 300;
 pub const SESSION_VERSION: u8 = 2;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionTtlConfig {
+    pub idle_ttl_secs: i64,
+    pub max_ttl_secs: i64,
+}
+
+impl Default for SessionTtlConfig {
+    fn default() -> Self {
+        Self {
+            idle_ttl_secs: IDLE_TTL_SECS,
+            max_ttl_secs: MAX_TTL_SECS,
+        }
+    }
+}
+
+impl SessionTtlConfig {
+    pub fn from_env() -> Self {
+        Self::from_map(&EnvSnapshot::from_process())
+    }
+
+    pub fn from_map(env: &EnvSnapshot) -> Self {
+        let idle = env
+            .first(&["SESSION_IDLE_TTL_SECONDS", "STYLES_SESSION_IDLE_TTL_SECONDS"])
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|&v| v >= 60)
+            .unwrap_or(IDLE_TTL_SECS);
+        let max = env
+            .first(&["SESSION_MAX_TTL_SECONDS", "STYLES_SESSION_MAX_TTL_SECONDS"])
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|&v| v >= idle)
+            .unwrap_or(MAX_TTL_SECS)
+            .max(idle);
+        Self {
+            idle_ttl_secs: idle,
+            max_ttl_secs: max,
+        }
+    }
+}
+
 const TX_FIELD_PATH: &str = "oidc-tx";
 const DISCOVERY_TTL: Duration = Duration::from_secs(3600);
 const JWKS_TTL: Duration = Duration::from_secs(600);
@@ -121,6 +160,16 @@ pub fn verify_session(
     current_epoch: i64,
     now: i64,
 ) -> Option<SessionClaims> {
+    verify_session_with_ttl(keys, value, current_epoch, now, SessionTtlConfig::default())
+}
+
+pub fn verify_session_with_ttl(
+    keys: &MasterKeys,
+    value: &str,
+    current_epoch: i64,
+    now: i64,
+    ttl: SessionTtlConfig,
+) -> Option<SessionClaims> {
     let value = value.trim();
     if value.len() > 8192 {
         return None;
@@ -147,7 +196,7 @@ pub fn verify_session(
     {
         return None;
     }
-    if now - claims.last > IDLE_TTL_SECS || now - claims.iat > MAX_TTL_SECS {
+    if now - claims.last > ttl.idle_ttl_secs || now - claims.iat > ttl.max_ttl_secs {
         return None;
     }
     Some(claims)
@@ -163,16 +212,46 @@ pub fn renew(mut claims: SessionClaims, now: i64) -> SessionClaims {
 }
 
 pub fn expires_info(claims: &SessionClaims) -> (i64, i64) {
-    let hard = claims.iat + MAX_TTL_SECS;
-    let idle = (claims.last + IDLE_TTL_SECS).min(hard);
+    expires_info_with_ttl(claims, SessionTtlConfig::default())
+}
+
+pub fn expires_info_with_ttl(claims: &SessionClaims, ttl: SessionTtlConfig) -> (i64, i64) {
+    let hard = claims.iat + ttl.max_ttl_secs;
+    let idle = (claims.last + ttl.idle_ttl_secs).min(hard);
     (hard * 1000, idle * 1000)
 }
 
 pub fn session_cookie(value: &str, secure: bool) -> String {
+    session_cookie_with_ttl(value, secure, MAX_TTL_SECS)
+}
+
+pub fn session_cookie_with_ttl(value: &str, secure: bool, max_ttl_secs: i64) -> String {
+    let ttl = max_ttl_secs.max(60);
     format!(
-        "{SESSION_COOKIE}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={MAX_TTL_SECS}{}",
+        "{SESSION_COOKIE}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl}{}",
         if secure { "; Secure" } else { "" }
     )
+}
+
+pub fn derive_session_csrf_token(keys: &MasterKeys, claims: &SessionClaims) -> String {
+    let msg = format!(
+        "csrf:{}:{}:{}:{}",
+        claims.mode, claims.sub, claims.iat, claims.epoch
+    );
+    b64u(&crypto::hmac_sha256(keys.session_hmac(), msg.as_bytes()))
+}
+
+pub fn verify_session_csrf_token(
+    keys: &MasterKeys,
+    claims: &SessionClaims,
+    candidate: &str,
+) -> bool {
+    let cand = candidate.trim();
+    if cand.is_empty() {
+        return false;
+    }
+    let expected = derive_session_csrf_token(keys, claims);
+    crypto::ct_eq_str(&expected, cand)
 }
 
 pub fn oidc_tx_cookie(value: &str, secure: bool) -> String {
@@ -286,6 +365,25 @@ impl LoginLimiter {
 
     pub fn ok(&self, ip: &str) {
         self.lock().remove(ip);
+    }
+
+    /// Increment fixed-window hit counter (used for `/copy` `15/5m/IP` throttling).
+    pub fn check_and_hit(&self, ip: &str) -> Result<(), u64> {
+        let now = Instant::now();
+        let mut m = self.lock();
+        if m.len() > 10_000 {
+            m.retain(|_, (_, until)| *until > now);
+        }
+        let e = m.entry(ip.to_string()).or_insert((0, now + self.window));
+        if now >= e.1 {
+            *e = (0, now + self.window);
+        }
+        if e.0 >= self.max {
+            let secs = e.1.saturating_duration_since(now).as_secs_f64().ceil() as u64;
+            return Err(secs.max(1));
+        }
+        e.0 += 1;
+        Ok(())
     }
 }
 

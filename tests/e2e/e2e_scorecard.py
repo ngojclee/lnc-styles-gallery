@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 /w18 Track M Post-Migration Parity & E2E Acceptance Scorecard
-Target: lnc-styles-gallery v1.0.0.0 (Rust/Axum single binary + React 19 SPA)
+Target: lnc-styles-gallery v1.0.0.1 (Rust/Axum single binary + React 19 SPA)
 Stdlib-only Python 3 harness — zero third-party packages required.
 """
 
@@ -495,7 +495,7 @@ def run_scorecard() -> int:
     bin_path = REPO_ROOT / "server-rs" / "target" / "release" / exe_name
     ui_dist = REPO_ROOT / "ui" / "dist"
 
-    print("=== LNC Styles Gallery v1.0.0.0 — /w18 Track M E2E Scorecard ===")
+    print("=== LNC Styles Gallery v1.0.0.1 — /w18 Track M E2E Scorecard ===")
 
     # Pre-check binary & UI dist
     bin_exists = bin_path.is_file() and bin_path.stat().st_size > 0
@@ -658,8 +658,8 @@ def run_scorecard() -> int:
         runner.record(
             "health",
             "H04",
-            "Version 1.0.0.0, corpus counts, p95 latency (<50ms) & RSS (<80MB)",
-            health_json.get("version") == "1.0.0.0"
+            "Version 1.0.0.1, corpus counts, p95 latency (<50ms) & RSS (<80MB)",
+            health_json.get("version") == "1.0.0.1"
             and health_json.get("styles_count") == 3
             and health_json.get("templates_count") == 2
             and health_json.get("components_count") == 2
@@ -865,8 +865,10 @@ def run_scorecard() -> int:
             and '/login.js' in lg_html
             and "script-src 'self'" in csp_val
             and "'unsafe-inline'" not in csp_val.split("style-src")[0]
+            and "frame-ancestors 'none'" in csp_val
+            and "no-store" in h_lg.get("cache-control", "").lower()
             and h_lg.get("x-content-type-options") == "nosniff"
-            and h_lg.get("x-frame-options") == "SAMEORIGIN"
+            and h_lg.get("x-frame-options") == "DENY"
             and "same-origin" in h_lg.get("cross-origin-opener-policy", ""),
             "High",
             f"xfo={h_lg.get('x-frame-options')}, nosniff={h_lg.get('x-content-type-options')}",
@@ -944,7 +946,7 @@ def run_scorecard() -> int:
             f"oidc_user={sess_info.get('sub')}, deny_loc={h_cb_deny.get('location')}",
         )
 
-        # Zero-F12-Leak key lifecycle: create -> GET masked -> /copy 410 -> rotate -> revoke -> delete
+        # Zero-F12-Leak & Vault Copy key lifecycle: create -> GET masked -> POST /copy 200 -> GET /copy 405 -> rotate -> revoke -> delete
         st_kc, _, _, b_kc = raw_http(
             app_port,
             "POST",
@@ -958,13 +960,51 @@ def run_scorecard() -> int:
 
         st_kl, _, _, b_kl = raw_http(app_port, "GET", "/api/keys", {"Cookie": oidc_sess})
         kl_text = b_kl.decode("utf-8")
+        legacy_ids = [
+            k.get("id", "")
+            for k in json.loads(kl_text).get("keys", [])
+            if k.get("id") != created_id and not k.get("copy_available", True)
+        ]
+        legacy_copy_ok = True
+        if legacy_ids:
+            st_legacy_copy, _, _, _ = raw_http(
+                app_port,
+                "POST",
+                f"/api/keys/{legacy_ids[0]}/copy",
+                {"Cookie": oidc_sess, "X-Forwarded-For": "10.88.0.1"},
+            )
+            legacy_copy_ok = st_legacy_copy == 410
 
-        st_copy, _, _, _ = raw_http(
-            app_port, "POST", f"/api/keys/{created_id}/copy", {"Cookie": oidc_sess}
+        st_copy_get, _, _, _ = raw_http(
+            app_port, "GET", f"/api/keys/{created_id}/copy", {"Cookie": oidc_sess}
         )
-        st_copy_admin, _, _, _ = raw_http(
-            app_port, "POST", f"/api/admin/keys/{created_id}/copy", {"Cookie": oidc_sess}
+        st_copy, h_copy, _, b_copy = raw_http(
+            app_port,
+            "POST",
+            f"/api/keys/{created_id}/copy",
+            {"Cookie": oidc_sess, "X-Forwarded-For": "10.88.0.2"},
         )
+        copy_json = json.loads(b_copy) if st_copy == 200 else {}
+        st_copy_admin, _, _, b_copy_admin = raw_http(
+            app_port,
+            "POST",
+            f"/api/admin/api-keys/{created_id}/copy",
+            {"Cookie": oidc_sess, "X-Forwarded-For": "10.88.0.2"},
+        )
+        copy_admin_json = json.loads(b_copy_admin) if st_copy_admin == 200 else {}
+
+        # Copy 15/5m/IP rate limit check on dedicated IP
+        copy_429 = False
+        for _ in range(16):
+            st_lim, h_lim, _, _ = raw_http(
+                app_port,
+                "POST",
+                f"/api/keys/{created_id}/copy",
+                {"Cookie": oidc_sess, "X-Forwarded-For": "10.88.0.99"},
+            )
+            if st_lim == 429 and "retry-after" in h_lim:
+                copy_429 = True
+                break
 
         st_rot, _, _, b_rot = raw_http(
             app_port,
@@ -1019,18 +1059,52 @@ def run_scorecard() -> int:
             app_port, "DELETE", f"/api/keys/{created_id}", {"Cookie": oidc_sess}
         )
 
+        # Inbound MCP Connector CRUD + Copy + Test + Rotate + Revoke + Delete
+        st_conn_c, _, _, b_conn_c = raw_http(
+            app_port,
+            "POST",
+            "/api/admin/mcp-connectors",
+            {"Cookie": oidc_sess, "Content-Type": "application/json"},
+            json.dumps({"name": "E2E MCP Connector", "scopes": ["mcp:read"]}),
+        )
+        conn_id = json.loads(b_conn_c).get("item", {}).get("id", "") if st_conn_c in (200, 201) else ""
+        st_conn_copy, _, _, b_conn_copy = raw_http(
+            app_port,
+            "POST",
+            f"/api/admin/mcp-connectors/{conn_id}/copy",
+            {"Cookie": oidc_sess, "X-Forwarded-For": "10.88.0.3"},
+        )
+        st_conn_test, _, _, b_conn_test = raw_http(
+            app_port,
+            "POST",
+            f"/api/admin/mcp-connectors/{conn_id}/test",
+            {"Cookie": oidc_sess},
+        )
+        st_conn_del, _, _, _ = raw_http(
+            app_port,
+            "DELETE",
+            f"/api/admin/mcp-connectors/{conn_id}",
+            {"Cookie": oidc_sess},
+        )
+
         runner.record(
             "security",
             "S06",
-            "Zero-F12-Leak key lifecycle (one-time create/rotate, masked GET, 410 on /copy, revoke/delete)",
+            "Zero-F12-Leak vault key & MCP connector lifecycle (masked GET, HKDF POST /copy + 15/5m 429, 405 GET /copy, legacy 410, rotate/revoke/delete)",
             st_kc in (200, 201)
             and created_raw.startswith("styles_")
             and st_kl == 200
             and "raw_key" not in kl_text
             and created_raw not in kl_text
             and LEGACY_PLAINTEXT_TOKEN not in kl_text
-            and st_copy == 410
-            and st_copy_admin == 410
+            and st_copy_get == 405
+            and st_copy == 200
+            and "no-store" in h_copy.get("cache-control", "").lower()
+            and copy_json.get("secret") == created_raw
+            and st_copy_admin == 200
+            and copy_admin_json.get("secret") == created_raw
+            and copy_429
+            and legacy_copy_ok
             and st_rot == 200
             and rotated_raw.startswith("styles_")
             and rotated_raw != created_raw
@@ -1038,12 +1112,59 @@ def run_scorecard() -> int:
             and st_new_tok == 200
             and st_revk == 200
             and st_rev_tok == 401
-            and st_delk == 200,
+            and st_delk == 200
+            and st_conn_c in (200, 201)
+            and st_conn_copy == 200
+            and json.loads(b_conn_copy).get("secret") == json.loads(b_conn_c).get("secret")
+            and st_conn_test == 200
+            and json.loads(b_conn_test).get("ok") is True
+            and st_conn_del == 200,
             "Critical",
-            f"copy_status={st_copy}, old_tok={st_old_tok}, rot_tok={st_new_tok}, revoked_tok={st_rev_tok}",
+            f"copy=({st_copy},{st_copy_admin},429={copy_429}), legacy410={legacy_copy_ok}, conn=({st_conn_c},{st_conn_copy},{st_conn_test},{st_conn_del})",
         )
 
-        # CSRF protection, SSRF metadata block & session_epoch revoke-all
+        # CSRF protection, logout Origin+X-CSRF-Token strict guard, ?token= 400 block, SSRF metadata block & session_epoch revoke-all
+        _, _, _, b_sess_csrf = raw_http(
+            app_port, "GET", "/api/auth/session", {"Cookie": oidc_sess}
+        )
+        csrf_tok = json.loads(b_sess_csrf).get("csrf_token") or ""
+        st_logout_get, _, _, _ = raw_http(
+            app_port, "GET", "/api/auth/logout", {"Cookie": oidc_sess}
+        )
+        st_logout_spoof, _, _, _ = raw_http(
+            app_port,
+            "POST",
+            "/api/auth/logout",
+            {
+                "Cookie": oidc_sess,
+                "Origin": "https://spoofed.evil.example",
+                "X-Forwarded-Host": "spoofed.evil.example",
+                "X-CSRF-Token": csrf_tok,
+            },
+        )
+        st_logout_nocsrf, _, _, _ = raw_http(
+            app_port,
+            "POST",
+            "/api/auth/logout",
+            {
+                "Cookie": oidc_sess,
+                "Origin": f"http://127.0.0.1:{app_port}",
+            },
+        )
+        st_logout_ok, _, sc_logout_ok, _ = raw_http(
+            app_port,
+            "POST",
+            "/api/auth/logout",
+            {
+                "Cookie": oidc_sess,
+                "Origin": f"http://127.0.0.1:{app_port}",
+                "X-CSRF-Token": csrf_tok,
+            },
+        )
+        st_q_tok, _, _, _ = raw_http(app_port, "GET", "/api/styles?token=secret_leak")
+        st_q_key, _, _, _ = raw_http(app_port, "GET", "/api/styles?key=secret_leak")
+        st_q_apik, _, _, _ = raw_http(app_port, "GET", "/mcp?api_key=secret_leak")
+
         st_csrf, _, _, _ = raw_http(
             app_port,
             "POST",
@@ -1070,7 +1191,10 @@ def run_scorecard() -> int:
             json.dumps({"public_base_url": "http://metadata.google.internal/computeMetadata/v1/"}),
         )
         st_rev_all, _, _, b_rev_all = raw_http(
-            app_port, "POST", "/api/auth/revoke-all", {"Cookie": oidc_sess}
+            app_port,
+            "POST",
+            "/api/auth/revoke-all",
+            {"Cookie": oidc_sess, "X-CSRF-Token": csrf_tok},
         )
         st_after_rev, _, _, _ = raw_http(
             app_port, "GET", "/api/keys", {"Cookie": oidc_sess}
@@ -1078,15 +1202,23 @@ def run_scorecard() -> int:
         runner.record(
             "security",
             "S07",
-            "CSRF Origin guard (403), SSRF metadata block (400) & revoke-all session_epoch invalidation",
+            "CSRF Origin+Token guard (403/405), ?token= 400 block, SSRF metadata block (400) & revoke-all session_epoch invalidation",
             st_csrf == 403
+            and st_logout_get == 405
+            and st_logout_spoof == 403
+            and st_logout_nocsrf == 403
+            and st_logout_ok == 200
+            and any("max-age=0" in sc.lower() for sc in sc_logout_ok)
+            and st_q_tok == 400
+            and st_q_key == 400
+            and st_q_apik == 400
             and st_ssrf1 == 400
             and st_ssrf2 == 400
             and st_rev_all == 200
             and json.loads(b_rev_all).get("session_epoch", 0) >= 2
             and st_after_rev == 401,
             "High",
-            f"csrf={st_csrf}, ssrf=({st_ssrf1},{st_ssrf2}), post_revoke_all={st_after_rev}",
+            f"csrf={st_csrf}, logout=({st_logout_get},{st_logout_spoof},{st_logout_nocsrf},{st_logout_ok}), q=({st_q_tok},{st_q_key},{st_q_apik}), ssrf=({st_ssrf1},{st_ssrf2}), post_revoke_all={st_after_rev}",
         )
 
         # Break-glass Argon2id login + 8/5m rate-limit -> 429 + Retry-After
@@ -1184,7 +1316,7 @@ def run_scorecard() -> int:
             "M01",
             "MCP `initialize`, `notifications/initialized` (HTTP 202) & `tools/list` (all 8 tools)",
             s_init == 200
-            and j_init["result"]["serverInfo"]["version"] == "1.0.0.0"
+            and j_init["result"]["serverInfo"]["version"] == "1.0.0.1"
             and s_notif == 202
             and j_notif is None
             and s_list == 200
@@ -1341,7 +1473,7 @@ def run_scorecard() -> int:
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     baseline_payload = {
         "service": "lnc-styles-gallery",
-        "version": "1.0.0.0",
+        "version": "1.0.0.1",
         "track": "Track M (Migration & Security Hardening)",
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "total_score": total_score,
@@ -1368,7 +1500,7 @@ def run_scorecard() -> int:
         "health": "Build, Startup, Latency & Footprint",
     }
     md_lines = [
-        "# E2E & Migration Parity Scorecard — `lnc-styles-gallery` (`v1.0.0.0`)",
+        "# E2E & Migration Parity Scorecard — `lnc-styles-gallery` (`v1.0.0.1`)",
         "",
         f"- **Track**: Track M (Python/FastAPI -> Rust/Axum Migration + Security Hardening)",
         f"- **Final Weighted Score**: **{total_score:.1f} / 100**",

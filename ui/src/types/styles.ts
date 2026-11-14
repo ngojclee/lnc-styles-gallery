@@ -182,6 +182,15 @@ export interface CorpusStatus {
   warnings?: string[]
 }
 
+export interface AuditEventSummary {
+  ts: string
+  actor: string
+  action: string
+  kind: string
+  record_id: string
+  ip: string
+}
+
 export interface AdminSettingsResponse {
   service_name: string
   service_version: string
@@ -201,11 +210,32 @@ export interface AdminSettingsResponse {
   mgmt_key_configured?: boolean
   mgmt_key_masked?: string
   oidc_enabled?: boolean
+  oidc_issuer?: string
+  oidc_client_id?: string
+  oidc_redirect_uri?: string
+  oidc_scopes?: string
+  oidc_allowed_users?: string[]
+  oidc_allowed_groups?: string[]
+  oidc_client_secret_configured?: boolean
   auth_required?: boolean
   mcp_auth_required?: boolean
   session_epoch?: number
+  session_idle_ttl_seconds?: number
+  session_max_ttl_seconds?: number
+  cookie_secure?: boolean
+  master_key_configured?: boolean
+  master_key_old_configured?: boolean
+  rewrapped_from_old_key?: boolean
+  connector_audience?: string
+  connector_max_scopes?: string[]
+  connector_delegation_configured?: boolean
+  recent_audit_events?: AuditEventSummary[]
   cors_origins: string
   allowed_hosts?: string
+  settings?: {
+    auth_mode?: string
+    [key: string]: unknown
+  }
 }
 
 export interface AuthUserInfo {
@@ -227,6 +257,7 @@ export interface AuthSessionResponse {
   session_epoch: number
   expires_at: number | null
   idle_expires_at: number | null
+  csrf_token?: string | null
 }
 
 export interface PublicApiKeyItem {
@@ -236,6 +267,65 @@ export interface PublicApiKeyItem {
   last4?: string
   masked?: string
   enabled: boolean
+  status?: "active" | "revoked"
+  source?: string
+  scopes?: string[]
+  copy_available?: boolean
   created: string
   rotated_at?: string | null
+  revoked_at?: string | null
+}
+
+export interface CopySecretResponse {
+  ok: boolean
+  id: string
+  secret: string
+  copied_field: string
+  endpoint_url?: string
+}
+
+export interface McpConnectorItem {
+  id: string
+  name: string
+  direction: string
+  transport: string
+  endpoint_url: string
+  audience: string
+  scopes: string[]
+  prefix: string
+  last4: string
+  masked: string
+  enabled: boolean
+  status: "active" | "revoked"
+  source: string
+  copy_available: boolean
+  created: string
+  rotated_at?: string | null
+  revoked_at?: string | null
+}
+
+export interface McpConnectorsListResponse {
+  ok: boolean
+  endpoint: string
+  namespace: string
+  transport: string
+  auth_required: boolean
+  audience: string
+  max_scopes: string[]
+  delegation_configured: boolean
+  tools_count: number
+  tools: Array<{ name: string; description: string }>
+  connectors: McpConnectorItem[]
+}
+
+export interface McpConnectorTestResponse {
+  ok: boolean
+  id: string
+  status: string
+  endpoint: string
+  tools_count: number
+  latency_ms: number
+  audience: string
+  scopes: string[]
+  detail: string
 }

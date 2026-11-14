@@ -184,6 +184,18 @@ impl MasterKeys {
         Ok((Self::from_master(raw.as_ref()), KeySource::Generated(path)))
     }
 
+    pub fn load_old_from_env() -> Result<Option<Self>, CryptoError> {
+        let env_val = std::env::var("LNC_MASTER_KEY_OLD").ok();
+        Self::load_old_from_str(env_val.as_deref())
+    }
+
+    pub fn load_old_from_str(env_value: Option<&str>) -> Result<Option<Self>, CryptoError> {
+        match env_value.map(str::trim).filter(|v| !v.is_empty()) {
+            Some(v) => Ok(Some(Self::from_encoded(v)?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn vault_kek(&self) -> &[u8; 32] {
         &self.vault_kek
     }
@@ -203,6 +215,27 @@ impl MasterKeys {
 
     pub fn open(&self, field_path: &str, envelope: &Value) -> Result<String, CryptoError> {
         open_field(&self.vault_kek, field_path, envelope)
+    }
+
+    /// Decrypt an `$enc:1` envelope with the active key, falling back to `LNC_MASTER_KEY_OLD`.
+    /// Returns `(plaintext, used_old_key)`.
+    pub fn open_with_old(
+        &self,
+        old: Option<&MasterKeys>,
+        field_path: &str,
+        envelope: &Value,
+    ) -> Result<(String, bool), CryptoError> {
+        match self.open(field_path, envelope) {
+            Ok(pt) => Ok((pt, false)),
+            Err(primary_err) => {
+                if let Some(old_keys) = old {
+                    if let Ok(pt) = old_keys.open(field_path, envelope) {
+                        return Ok((pt, true));
+                    }
+                }
+                Err(primary_err)
+            }
+        }
     }
 
     /// Peppered lookup hash for API keys / management key (`HMAC-SHA256` hex).
@@ -276,6 +309,26 @@ pub fn write_private_file_atomic(path: &Path, data: &[u8]) -> Result<(), CryptoE
             let _ = std::fs::set_permissions(path, perms);
         }
     }
+    Ok(())
+}
+
+/// Append one single-line record to an audit file (`0600` on Unix).
+pub fn append_private_jsonl_line(path: &Path, line: &str) -> Result<(), CryptoError> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| CryptoError::Io(e.to_string()))?;
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path).map_err(|e| CryptoError::Io(e.to_string()))?;
+    f.write_all(line.as_bytes())
+        .and_then(|_| f.write_all(b"\n"))
+        .map_err(|e| CryptoError::Io(e.to_string()))?;
     Ok(())
 }
 
@@ -678,6 +731,38 @@ mod tests {
             "super-secret-value"
         );
         assert!(k.open("config.wrong_aad", &env).is_err());
+    }
+
+    #[test]
+    fn old_master_key_rotation_rewrap_and_fail_closed() {
+        let old_hex = "1111111111111111111111111111111111111111111111111111111111111111";
+        let old_k = MasterKeys::from_encoded(old_hex).unwrap();
+        let new_k = MasterKeys::from_encoded(HEX_KEY).unwrap();
+        let wrong_k = MasterKeys::from_encoded(
+            "2222222222222222222222222222222222222222222222222222222222222222",
+        )
+        .unwrap();
+
+        let env = old_k.seal("api_keys.k1.secret", "styles_old_secret_123456").unwrap();
+        let (pt, used_old) = new_k
+            .open_with_old(Some(&old_k), "api_keys.k1.secret", &env)
+            .unwrap();
+        assert_eq!(pt, "styles_old_secret_123456");
+        assert!(used_old);
+
+        let rewrapped = new_k.seal("api_keys.k1.secret", &pt).unwrap();
+        let (pt2, used_old2) = new_k
+            .open_with_old(Some(&old_k), "api_keys.k1.secret", &rewrapped)
+            .unwrap();
+        assert_eq!(pt2, "styles_old_secret_123456");
+        assert!(!used_old2);
+
+        // Wrong key without matching old key fails closed.
+        assert!(new_k
+            .open_with_old(Some(&wrong_k), "api_keys.k1.secret", &env)
+            .is_err());
+        assert!(MasterKeys::load_old_from_str(Some("not-valid-key")).is_err());
+        assert!(MasterKeys::load_old_from_str(None).unwrap().is_none());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# API & MCP Documentation — `lnc-styles-gallery` (v0.2.0)
+# API & MCP Documentation — `lnc-styles-gallery` (v1.0.0.1)
 
 Base URL (local): `http://localhost:8460`
 Base URL (production): `https://styles.lengoc.me`
@@ -78,16 +78,43 @@ Returns attribution metadata for Refero Styles (`styles.refero.design`), per-sty
 ### `POST /api/admin/reindex`
 Re-scans the Refero Styles and Prompt-Driven UI corpus directories (including newly harvested preview/shot images) in memory without restarting the server.
 
+### Auth, Sessions & Security Controls (`/api/auth/*`)
+- `GET /api/auth/session` — Returns active session metadata (`authenticated`, `mode`, `user`, `csrf_token`, `session_epoch`, `expires_at`, `idle_expires_at`).
+- `GET /api/auth/oidc/login` & `GET /api/auth/oidc/callback` — Keycloak OIDC Authorization Code flow with PKCE `S256`, `state`, `nonce`, and allowlist checks.
+- `POST /api/auth/login` — Break-glass management key login (Argon2id verified, IP rate-limited).
+- `POST /api/auth/logout` — Local-only session logout requiring valid `X-CSRF-Token` + strict `Origin`/`Sec-Fetch-Site` host match (`X-Forwarded-Host` ignored). `GET /api/auth/logout` returns `405 Method Not Allowed`.
+- `POST /api/auth/sessions/revoke-all` — Increments `session_epoch` to invalidate all active browser cookies (`X-CSRF-Token` required).
+- Query-string secret tokens (`?token=`, `?key=`, `?api_key=`) are rejected globally with `400 Bad Request`.
+- Sensitive endpoints (`/login.html`, `/login.js`, `/api/auth/*`, `/api/keys*`, `/api/admin/*`, `/api/mcp-connectors*`) set `Cache-Control: no-store, private, max-age=0`.
+
+### Admin API Keys & Vault Copy (`/api/admin/api-keys*` & `/api/keys*`)
+- `GET /api/admin/api-keys` (alias `GET /api/keys`) — Masked list (`prefix...last4`, `scopes`, `copy_available`, never returns plaintext secret).
+- `POST /api/admin/api-keys` (alias `POST /api/keys`) — Issue SHA-256 hashed key + HKDF AES-256-GCM vault envelope.
+- `PATCH /api/admin/api-keys/{id}` (alias `PATCH /api/keys/{id}`) — Update label/scopes without rotating secret.
+- `POST /api/admin/api-keys/{id}/copy` (aliases `POST /api/admin/keys/{id}/copy`, `POST /api/keys/{id}/copy`) — Rate-limited (`15/5m/IP`), CSRF-protected decrypt & copy with `secret.copy` `audit.jsonl` record (`410 Gone` for legacy hash-only keys lacking a vault envelope).
+- `POST /api/admin/api-keys/{id}/rotate` (alias `POST /api/keys/{id}/rotate`) — Generate new key, re-seal vault envelope, invalidate previous secret.
+- `POST /api/admin/api-keys/{id}/revoke` (alias `POST /api/keys/{id}/revoke`) — Enable/revoke key.
+- `DELETE /api/admin/api-keys/{id}` (alias `DELETE /api/keys/{id}`) — Permanently remove active or revoked key and purge vault envelope.
+
+### Inbound MCP Connectors (`/api/admin/mcp-connectors*` & `/api/mcp-connectors*`)
+- `GET /api/admin/mcp-connectors` — Inbound `/mcp` posture, audience, max scopes, exposed tools (`8`), and connector list (`prefix...last4` masked).
+- `POST /api/admin/mcp-connectors` — Provision audience-bound inbound connector credential + HKDF vault envelope.
+- `PATCH /api/admin/mcp-connectors/{id}` — Update connector metadata or optional replacement secret (blank leaves existing secret unchanged).
+- `POST /api/admin/mcp-connectors/{id}/copy` — Audited (`secret.copy`), rate-limited (`15/5m/IP`), CSRF-protected decrypt & copy.
+- `POST /api/admin/mcp-connectors/{id}/rotate`, `/revoke`, `/test`, `DELETE` — Rotate, revoke/enable, live self-probe against `POST /mcp`, or delete (Env-managed connectors lock mutations while permitting `/test`).
+
 ---
 
 ## MCP Endpoint (`/mcp`)
 
-Protocol: **MCP Streamable HTTP** (`POST /mcp` JSON-RPC 2.0).
+Protocol: **MCP Streamable HTTP** (`POST /mcp` JSON-RPC 2.0, `Authorization: Bearer <token>` or `X-API-Key: <token>`).
 
-Tools (`styles__*` namespace):
+Tools (`styles__*` namespace, 8 tools):
 1. `styles__list_styles(theme?, category?, limit?, offset?)`
 2. `styles__search(query, theme?, category?, include_content?, limit?)`
 3. `styles__get_design(style_id)`
 4. `styles__list_collections()`
 5. `styles__get_template(template_id, include_html?)`
-6. `styles__reindex()`
+6. `styles__list_components(category?, kind?, limit?, offset?)`
+7. `styles__get_component(component_id, include_source?)`
+8. `styles__reindex()`

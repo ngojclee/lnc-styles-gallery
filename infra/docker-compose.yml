@@ -1,9 +1,9 @@
 version: "3.8"
 
-# LNC Style Library (styles.lengoc.me) — Rust/Axum Runtime (v1.0.0.0)
+# LNC Style Library (styles.lengoc.me) — Rust/Axum Runtime (v1.0.0.1)
 #   Web: http://<host>:8460  (container 8000)
 #   Data: bind ${DATA_DIR}/lnc-styles-gallery -> /data:ro (read-only corpus)
-#   Config: bind ${DATA_DIR}/lnc-styles-gallery-config -> /config (vault & hashed keys)
+#   Config: bind ${DATA_DIR}/lnc-styles-gallery-config -> /config (vault, audit & hashed keys)
 
 services:
   lnc-styles-gallery:
@@ -21,6 +21,7 @@ services:
       - STYLES_CONFIG_DIR=/config
       - STYLES_PUBLIC_URL=${STYLES_PUBLIC_URL:-https://styles.lengoc.me}
       - LNC_MASTER_KEY=${LNC_MASTER_KEY:-}
+      - LNC_MASTER_KEY_OLD=${LNC_MASTER_KEY_OLD:-}
       - LNC_REQUIRE_MASTER_KEY=${LNC_REQUIRE_MASTER_KEY:-false}
       - MANAGEMENT_KEY=${MANAGEMENT_KEY:-}
       - STYLES_API_KEY=${STYLES_API_KEY:-}
@@ -33,6 +34,11 @@ services:
       - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-https://styles.lengoc.me/api/auth/oidc/callback}
       - OIDC_ALLOWED_USERS=${OIDC_ALLOWED_USERS:-}
       - OIDC_ALLOWED_GROUPS=${OIDC_ALLOWED_GROUPS:-}
+      - COOKIE_SECURE=${COOKIE_SECURE:-true}
+      - SESSION_IDLE_TTL_SECONDS=${SESSION_IDLE_TTL_SECONDS:-3600}
+      - SESSION_MAX_TTL_SECONDS=${SESSION_MAX_TTL_SECONDS:-43200}
+      - CONNECTOR_AUDIENCE=${CONNECTOR_AUDIENCE:-lnc-styles-gallery}
+      - CONNECTOR_MAX_SCOPES=${CONNECTOR_MAX_SCOPES:-mcp:read,admin:reindex}
       - TZ=${TZ:-Europe/Paris}
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
     volumes:

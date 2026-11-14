@@ -5,13 +5,24 @@ import {
   KeyRound,
   MonitorSmartphone,
   Palette,
+  Plug,
   Scale,
   Settings2,
 } from "lucide-react"
 
 export interface NavItem {
   title: string
-  to: "/" | "/styles" | "/collections" | "/templates" | "/components" | "/platforms" | "/licenses" | "/keys" | "/admin"
+  to:
+    | "/"
+    | "/styles"
+    | "/collections"
+    | "/templates"
+    | "/components"
+    | "/platforms"
+    | "/licenses"
+    | "/keys"
+    | "/mcp-connectors"
+    | "/settings"
   icon: typeof Palette
   description: string
   badgeKey?: "styles_count" | "collections_count" | "templates_count" | "components_count"
@@ -60,28 +71,34 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: MonitorSmartphone,
         description: "iOS / Android / vendor official design systems",
       },
-    ],
-  },
-  {
-    label: "Governance & Ops",
-    items: [
-      {
-        title: "API Keys & MCP",
-        to: "/keys",
-        icon: KeyRound,
-        description: "Bearer tokens, FastMCP endpoint & Hub integration",
-      },
       {
         title: "Licenses & Sources",
         to: "/licenses",
         icon: Scale,
         description: "Source attributions & open-source corpus licenses",
       },
+    ],
+  },
+  {
+    label: "Governance & Ops",
+    items: [
       {
-        title: "Corpus Admin",
-        to: "/admin",
+        title: "API Keys",
+        to: "/keys",
+        icon: KeyRound,
+        description: "Inbound API keys (Copy, Rotate, Revoke, Remove)",
+      },
+      {
+        title: "MCP Connectors",
+        to: "/mcp-connectors",
+        icon: Plug,
+        description: "Streamable HTTP /mcp endpoint, 8 tools & connector tokens",
+      },
+      {
+        title: "Settings",
+        to: "/settings",
         icon: Settings2,
-        description: "Hot re-index, corpus diagnostics, and runtime settings",
+        description: "Authentication posture, corpus diagnostics & runtime URL",
       },
     ],
   },

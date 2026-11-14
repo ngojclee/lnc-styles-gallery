@@ -11,11 +11,14 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as ApiKeysRouteImport } from './routes/api-keys'
 import { Route as CollectionsRouteImport } from './routes/collections'
 import { Route as ComponentsRouteImport } from './routes/components'
 import { Route as KeysRouteImport } from './routes/keys'
 import { Route as LicensesRouteImport } from './routes/licenses'
+import { Route as McpConnectorsRouteImport } from './routes/mcp-connectors'
 import { Route as PlatformsRouteImport } from './routes/platforms'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as StylesRouteImport } from './routes/styles'
 import { Route as TemplatesRouteImport } from './routes/templates'
 
@@ -27,6 +30,11 @@ const IndexRoute = IndexRouteImport.update({
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiKeysRoute = ApiKeysRouteImport.update({
+  id: '/api-keys',
+  path: '/api-keys',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CollectionsRoute = CollectionsRouteImport.update({
@@ -49,9 +57,19 @@ const LicensesRoute = LicensesRouteImport.update({
   path: '/licenses',
   getParentRoute: () => rootRouteImport,
 } as any)
+const McpConnectorsRoute = McpConnectorsRouteImport.update({
+  id: '/mcp-connectors',
+  path: '/mcp-connectors',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PlatformsRoute = PlatformsRouteImport.update({
   id: '/platforms',
   path: '/platforms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StylesRoute = StylesRouteImport.update({
@@ -68,22 +86,28 @@ const TemplatesRoute = TemplatesRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/api-keys': typeof ApiKeysRoute
   '/collections': typeof CollectionsRoute
   '/components': typeof ComponentsRoute
   '/keys': typeof KeysRoute
   '/licenses': typeof LicensesRoute
+  '/mcp-connectors': typeof McpConnectorsRoute
   '/platforms': typeof PlatformsRoute
+  '/settings': typeof SettingsRoute
   '/styles': typeof StylesRoute
   '/templates': typeof TemplatesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/api-keys': typeof ApiKeysRoute
   '/collections': typeof CollectionsRoute
   '/components': typeof ComponentsRoute
   '/keys': typeof KeysRoute
   '/licenses': typeof LicensesRoute
+  '/mcp-connectors': typeof McpConnectorsRoute
   '/platforms': typeof PlatformsRoute
+  '/settings': typeof SettingsRoute
   '/styles': typeof StylesRoute
   '/templates': typeof TemplatesRoute
 }
@@ -91,11 +115,14 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/api-keys': typeof ApiKeysRoute
   '/collections': typeof CollectionsRoute
   '/components': typeof ComponentsRoute
   '/keys': typeof KeysRoute
   '/licenses': typeof LicensesRoute
+  '/mcp-connectors': typeof McpConnectorsRoute
   '/platforms': typeof PlatformsRoute
+  '/settings': typeof SettingsRoute
   '/styles': typeof StylesRoute
   '/templates': typeof TemplatesRoute
 }
@@ -104,33 +131,42 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/api-keys'
     | '/collections'
     | '/components'
     | '/keys'
     | '/licenses'
+    | '/mcp-connectors'
     | '/platforms'
+    | '/settings'
     | '/styles'
     | '/templates'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/admin'
+    | '/api-keys'
     | '/collections'
     | '/components'
     | '/keys'
     | '/licenses'
+    | '/mcp-connectors'
     | '/platforms'
+    | '/settings'
     | '/styles'
     | '/templates'
   id:
     | '__root__'
     | '/'
     | '/admin'
+    | '/api-keys'
     | '/collections'
     | '/components'
     | '/keys'
     | '/licenses'
+    | '/mcp-connectors'
     | '/platforms'
+    | '/settings'
     | '/styles'
     | '/templates'
   fileRoutesById: FileRoutesById
@@ -138,11 +174,14 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
+  ApiKeysRoute: typeof ApiKeysRoute
   CollectionsRoute: typeof CollectionsRoute
   ComponentsRoute: typeof ComponentsRoute
   KeysRoute: typeof KeysRoute
   LicensesRoute: typeof LicensesRoute
+  McpConnectorsRoute: typeof McpConnectorsRoute
   PlatformsRoute: typeof PlatformsRoute
+  SettingsRoute: typeof SettingsRoute
   StylesRoute: typeof StylesRoute
   TemplatesRoute: typeof TemplatesRoute
 }
@@ -161,6 +200,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api-keys': {
+      id: '/api-keys'
+      path: '/api-keys'
+      fullPath: '/api-keys'
+      preLoaderRoute: typeof ApiKeysRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/collections': {
@@ -191,11 +237,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LicensesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/mcp-connectors': {
+      id: '/mcp-connectors'
+      path: '/mcp-connectors'
+      fullPath: '/mcp-connectors'
+      preLoaderRoute: typeof McpConnectorsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/platforms': {
       id: '/platforms'
       path: '/platforms'
       fullPath: '/platforms'
       preLoaderRoute: typeof PlatformsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/styles': {
@@ -218,11 +278,14 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
+  ApiKeysRoute: ApiKeysRoute,
   CollectionsRoute: CollectionsRoute,
   ComponentsRoute: ComponentsRoute,
   KeysRoute: KeysRoute,
   LicensesRoute: LicensesRoute,
+  McpConnectorsRoute: McpConnectorsRoute,
   PlatformsRoute: PlatformsRoute,
+  SettingsRoute: SettingsRoute,
   StylesRoute: StylesRoute,
   TemplatesRoute: TemplatesRoute,
 }

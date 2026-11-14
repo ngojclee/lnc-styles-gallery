@@ -146,6 +146,12 @@ pub struct AppSettings {
     pub ssrf_block_private: bool,
     pub dev_open_admin: bool,
     pub allowed_hosts: String,
+    pub session_ttl: crate::oidc::SessionTtlConfig,
+    pub master_key_configured: bool,
+    pub master_key_old_configured: bool,
+    pub connector_audience: String,
+    pub connector_max_scopes: Vec<String>,
+    pub connector_delegation_configured: bool,
 }
 
 fn detect_root_dir(env: &EnvSnapshot) -> PathBuf {
@@ -182,7 +188,7 @@ fn read_version(root_dir: &Path, env: &EnvSnapshot) -> String {
             }
         }
     }
-    "1.0.0.0".to_string()
+    "1.0.0.1".to_string()
 }
 
 impl AppSettings {
@@ -264,6 +270,34 @@ impl AppSettings {
             ssrf_block_private,
             dev_open_admin: env.bool_or("STYLES_DEV_OPEN_ADMIN", false),
             allowed_hosts: env.first(&["ALLOWED_HOSTS"]).unwrap_or("*").to_string(),
+            session_ttl: crate::oidc::SessionTtlConfig::from_map(env),
+            master_key_configured: env.first(&["LNC_MASTER_KEY"]).is_some(),
+            master_key_old_configured: env.first(&["LNC_MASTER_KEY_OLD"]).is_some(),
+            connector_audience: env
+                .first(&["CONNECTOR_AUDIENCE"])
+                .unwrap_or("styles-mcp")
+                .to_string(),
+            connector_max_scopes: env
+                .first(&["CONNECTOR_MAX_SCOPES"])
+                .map(|s| {
+                    s.split(',')
+                        .map(|x| x.trim().to_string())
+                        .filter(|x| !x.is_empty())
+                        .collect()
+                })
+                .filter(|v: &Vec<String>| !v.is_empty())
+                .unwrap_or_else(|| {
+                    vec![
+                        "mcp:read".to_string(),
+                        "styles:read".to_string(),
+                        "templates:read".to_string(),
+                        "components:read".to_string(),
+                        "corpus:reindex".to_string(),
+                    ]
+                }),
+            connector_delegation_configured: env
+                .first(&["DELEGATION_SECRET", "CONNECTOR_DELEGATION_SECRET"])
+                .is_some(),
         }
     }
 
@@ -333,6 +367,7 @@ impl Default for PersistedConfig {
 }
 
 /// On-disk record inside `keys.json` — ZERO plaintext `key` or `raw_key`.
+/// Encrypted clipboard envelopes live in sibling `vault.json` (`$enc:1` AES-256-GCM).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredApiKey {
     pub id: String,
@@ -343,6 +378,10 @@ pub struct StoredApiKey {
     pub last4: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default = "default_source")]
+    pub source: String,
+    #[serde(default = "default_key_scopes")]
+    pub scopes: Vec<String>,
     #[serde(default)]
     pub created: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -355,6 +394,23 @@ fn default_enabled() -> bool {
     true
 }
 
+fn default_source() -> String {
+    "runtime".to_string()
+}
+
+fn default_key_scopes() -> Vec<String> {
+    vec![
+        "mcp:read".to_string(),
+        "styles:read".to_string(),
+        "templates:read".to_string(),
+        "components:read".to_string(),
+    ]
+}
+
+fn default_vault_version() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KeysFile {
     #[serde(default = "default_cfg_version")]
@@ -363,8 +419,62 @@ pub struct KeysFile {
     pub api_keys: Vec<StoredApiKey>,
 }
 
-/// Redacted public view returned by `GET /api/keys` and key mutation `item`.
-/// Never contains `raw_key`, `key`, or `key_hash`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VaultFile {
+    #[serde(default = "default_vault_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub api_keys: std::collections::BTreeMap<String, Value>,
+    #[serde(default)]
+    pub mcp_connectors: std::collections::BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredMcpConnector {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_connector_direction")]
+    pub direction: String,
+    #[serde(default = "default_connector_transport")]
+    pub transport: String,
+    #[serde(default)]
+    pub audience: String,
+    #[serde(default = "default_key_scopes")]
+    pub scopes: Vec<String>,
+    pub token_hash: String,
+    pub prefix: String,
+    #[serde(default)]
+    pub last4: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_source")]
+    pub source: String,
+    #[serde(default)]
+    pub created: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<String>,
+}
+
+fn default_connector_direction() -> String {
+    "inbound".to_string()
+}
+
+fn default_connector_transport() -> String {
+    "streamable_http".to_string()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConnectorsFile {
+    #[serde(default = "default_vault_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub connectors: Vec<StoredMcpConnector>,
+}
+
+/// Redacted public view returned by `GET /api/keys` / `GET /api/admin/api-keys`.
+/// Never contains `raw_key`, `key`, `key_hash`, or ciphertext.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiKeyPublicView {
     pub id: String,
@@ -373,6 +483,10 @@ pub struct ApiKeyPublicView {
     pub last4: String,
     pub masked: String,
     pub enabled: bool,
+    pub status: String,
+    pub source: String,
+    pub scopes: Vec<String>,
+    pub copy_available: bool,
     pub created: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rotated_at: Option<String>,
@@ -380,8 +494,44 @@ pub struct ApiKeyPublicView {
     pub revoked_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpConnectorPublicView {
+    pub id: String,
+    pub name: String,
+    pub direction: String,
+    pub transport: String,
+    pub endpoint_url: String,
+    pub audience: String,
+    pub scopes: Vec<String>,
+    pub prefix: String,
+    pub last4: String,
+    pub masked: String,
+    pub enabled: bool,
+    pub status: String,
+    pub source: String,
+    pub copy_available: bool,
+    pub created: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CopySecretOutcome {
+    Secret(Zeroizing<String>),
+    LegacyHashOnly,
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectorMutationError {
+    NotFound,
+    EnvManaged,
+}
+
 impl StoredApiKey {
-    pub fn to_public_view(&self) -> ApiKeyPublicView {
+    pub fn to_public_view(&self, copy_available: bool) -> ApiKeyPublicView {
         ApiKeyPublicView {
             id: self.id.clone(),
             label: self.label.clone(),
@@ -389,6 +539,70 @@ impl StoredApiKey {
             last4: self.last4.clone(),
             masked: crypto::format_masked_key(&self.prefix, &self.last4),
             enabled: self.enabled,
+            status: if self.enabled {
+                "active".to_string()
+            } else {
+                "revoked".to_string()
+            },
+            source: if self.source.is_empty() {
+                "runtime".to_string()
+            } else {
+                self.source.clone()
+            },
+            scopes: if self.scopes.is_empty() {
+                default_key_scopes()
+            } else {
+                self.scopes.clone()
+            },
+            copy_available,
+            created: self.created.clone(),
+            rotated_at: self.rotated_at.clone(),
+            revoked_at: self.revoked_at.clone(),
+        }
+    }
+}
+
+impl StoredMcpConnector {
+    pub fn to_public_view(&self, endpoint_url: &str, copy_available: bool) -> McpConnectorPublicView {
+        McpConnectorPublicView {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            direction: if self.direction.is_empty() {
+                "inbound".to_string()
+            } else {
+                self.direction.clone()
+            },
+            transport: if self.transport.is_empty() {
+                "streamable_http".to_string()
+            } else {
+                self.transport.clone()
+            },
+            endpoint_url: endpoint_url.to_string(),
+            audience: if self.audience.is_empty() {
+                "styles-mcp".to_string()
+            } else {
+                self.audience.clone()
+            },
+            scopes: if self.scopes.is_empty() {
+                default_key_scopes()
+            } else {
+                self.scopes.clone()
+            },
+            prefix: self.prefix.clone(),
+            last4: self.last4.clone(),
+            masked: crypto::format_masked_key(&self.prefix, &self.last4),
+            enabled: self.enabled,
+            status: if self.enabled {
+                "active".to_string()
+            } else {
+                "revoked".to_string()
+            },
+            source: if self.source.is_empty() {
+                "runtime".to_string()
+            } else {
+                self.source.clone()
+            },
+            copy_available,
             created: self.created.clone(),
             rotated_at: self.rotated_at.clone(),
             revoked_at: self.revoked_at.clone(),
@@ -400,12 +614,16 @@ impl StoredApiKey {
 struct StoreInner {
     cfg: PersistedConfig,
     keys: Vec<StoredApiKey>,
+    connectors: Vec<StoredMcpConnector>,
+    vault: VaultFile,
 }
 
-/// Thread-safe manager for `config.json` and `keys.json` in `${STYLES_CONFIG_DIR}`.
+/// Thread-safe manager for `config.json`, `keys.json`, `connectors.json`, `vault.json`, and `audit.jsonl`.
 pub struct RuntimeStore {
     config_dir: PathBuf,
     master: MasterKeys,
+    rewrapped_from_old_key: bool,
+    copy_limiter: crate::oidc::LoginLimiter,
     inner: RwLock<StoreInner>,
 }
 
@@ -424,10 +642,14 @@ impl RuntimeStore {
         env: &EnvSnapshot,
     ) -> Result<Self, CryptoError> {
         std::fs::create_dir_all(config_dir).map_err(|e| CryptoError::Io(e.to_string()))?;
+        let old_master = MasterKeys::load_old_from_str(env.first(&["LNC_MASTER_KEY_OLD"]))?;
         let config_path = config_dir.join("config.json");
         let keys_path = config_dir.join("keys.json");
+        let connectors_path = config_dir.join("connectors.json");
+        let vault_path = config_dir.join("vault.json");
 
-        let (mut cfg, mut cfg_dirty) = load_and_migrate_config(&config_path, &master)?;
+        let (mut cfg, mut cfg_dirty, mut rewrapped) =
+            load_and_migrate_config(&config_path, &master, old_master.as_ref())?;
 
         // Sync management credential from env if configured.
         if let Some(raw_mgmt) = env.first(&[
@@ -471,21 +693,34 @@ impl RuntimeStore {
             save_config_file(&config_path, &cfg)?;
         }
 
-        let (mut keys, mut keys_dirty) = load_and_migrate_keys(&keys_path, &master)?;
+        let (mut vault, mut vault_dirty, vault_rewrapped) =
+            load_vault_file(&vault_path, &master, old_master.as_ref())?;
+        if vault_rewrapped {
+            rewrapped = true;
+        }
 
-        // Optional seed connector token from env (`MCP_CONNECTOR_TOKEN` / `STYLES_HUB_API_KEY`).
+        let (mut keys, mut keys_dirty) =
+            load_and_migrate_keys(&keys_path, &master, &mut vault, &mut vault_dirty)?;
+
+        // Optional seed connector token from env (`STYLES_HUB_API_KEY` / `MCP_CONNECTOR_TOKEN`).
         if let Some(seed_tok) = env.first(&["STYLES_HUB_API_KEY", "MCP_CONNECTOR_TOKEN"]) {
             let h = master.api_key_hash(seed_tok);
             let exists = keys.iter().any(|k| crypto::ct_eq_str(&k.key_hash, &h));
             if !exists {
                 let (prefix, last4) = crypto::extract_prefix_and_last4(seed_tok);
+                let id = "hub_default".to_string();
+                let env_box = master.seal(&format!("api_keys.{id}.secret"), seed_tok)?;
+                vault.api_keys.insert(id.clone(), env_box);
+                vault_dirty = true;
                 keys.push(StoredApiKey {
-                    id: "hub_default".to_string(),
+                    id,
                     label: "Business MCP Hub".to_string(),
                     key_hash: h,
                     prefix,
                     last4,
                     enabled: true,
+                    source: "env".to_string(),
+                    scopes: default_key_scopes(),
                     created: now_iso8601(),
                     rotated_at: None,
                     revoked_at: None,
@@ -494,15 +729,153 @@ impl RuntimeStore {
             }
         }
 
+        // Load or bootstrap inbound MCP connectors (`connectors.json`).
+        let (mut connectors, mut connectors_dirty) =
+            load_and_migrate_connectors(&connectors_path, &master, &mut vault, &mut vault_dirty)?;
+
+        let default_aud = env
+            .first(&["CONNECTOR_AUDIENCE"])
+            .unwrap_or("styles-mcp")
+            .to_string();
+        let default_scopes: Vec<String> = env
+            .first(&["CONNECTOR_MAX_SCOPES"])
+            .map(|s| {
+                s.split(',')
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect()
+            })
+            .filter(|v: &Vec<String>| !v.is_empty())
+            .unwrap_or_else(default_key_scopes);
+
+        if let Some(env_bearer) = env.first(&["CONNECTOR_BEARER"]) {
+            let h = master.api_key_hash(env_bearer);
+            let exists = connectors
+                .iter()
+                .any(|c| c.id == "mcp_env_bearer" && crypto::ct_eq_str(&c.token_hash, &h));
+            if !exists {
+                let (prefix, last4) = crypto::extract_prefix_and_last4(env_bearer);
+                let id = "mcp_env_bearer".to_string();
+                let env_box = master.seal(&format!("mcp_connectors.{id}.secret"), env_bearer)?;
+                vault.mcp_connectors.insert(id.clone(), env_box);
+                vault_dirty = true;
+                connectors.retain(|c| c.id != "mcp_env_bearer");
+                connectors.insert(
+                    0,
+                    StoredMcpConnector {
+                        id,
+                        name: "Inbound MCP Connector (Env)".to_string(),
+                        direction: "inbound".to_string(),
+                        transport: "streamable_http".to_string(),
+                        audience: default_aud.clone(),
+                        scopes: default_scopes.clone(),
+                        token_hash: h,
+                        prefix,
+                        last4,
+                        enabled: true,
+                        source: "env".to_string(),
+                        created: now_iso8601(),
+                        rotated_at: None,
+                        revoked_at: None,
+                    },
+                );
+                connectors_dirty = true;
+            }
+        } else if !connectors_path.exists() {
+            let raw = Zeroizing::new(crypto::generate_api_token("styles_mcp"));
+            let h = master.api_key_hash(&raw);
+            let (prefix, last4) = crypto::extract_prefix_and_last4(&raw);
+            let id = "mcp_default".to_string();
+            let env_box = master.seal(&format!("mcp_connectors.{id}.secret"), &raw)?;
+            vault.mcp_connectors.insert(id.clone(), env_box);
+            vault_dirty = true;
+            connectors.push(StoredMcpConnector {
+                id,
+                name: "LNC Inbound MCP Connector".to_string(),
+                direction: "inbound".to_string(),
+                transport: "streamable_http".to_string(),
+                audience: default_aud,
+                scopes: default_scopes,
+                token_hash: h,
+                prefix,
+                last4,
+                enabled: true,
+                source: "runtime".to_string(),
+                created: now_iso8601(),
+                rotated_at: None,
+                revoked_at: None,
+            });
+            connectors_dirty = true;
+        }
+
         if keys_dirty {
             save_keys_file(&keys_path, &keys)?;
+        }
+        if connectors_dirty || !connectors_path.exists() {
+            save_connectors_file(&connectors_path, &connectors)?;
+        }
+        if vault_dirty {
+            save_vault_file(&vault_path, &vault)?;
         }
 
         Ok(Self {
             config_dir: config_dir.to_path_buf(),
             master,
-            inner: RwLock::new(StoreInner { cfg, keys }),
+            rewrapped_from_old_key: rewrapped,
+            copy_limiter: crate::oidc::LoginLimiter::new(15, std::time::Duration::from_secs(300)),
+            inner: RwLock::new(StoreInner {
+                cfg,
+                keys,
+                connectors,
+                vault,
+            }),
         })
+    }
+
+    pub fn rewrapped_from_old_key(&self) -> bool {
+        self.rewrapped_from_old_key
+    }
+
+    pub fn check_copy_rate_limit(&self, ip: &str) -> Result<(), u64> {
+        self.copy_limiter.check_and_hit(ip)
+    }
+
+    pub fn record_audit_event(
+        &self,
+        actor: &str,
+        action: &str,
+        kind: &str,
+        record_id: &str,
+        ip: &str,
+    ) {
+        let entry = json!({
+            "ts": now_iso8601(),
+            "actor": actor,
+            "action": action,
+            "kind": kind,
+            "record_id": record_id,
+            "ip": ip,
+        });
+        let _ = crypto::append_private_jsonl_line(
+            &self.config_dir.join("audit.jsonl"),
+            &entry.to_string(),
+        );
+    }
+
+    pub fn recent_audit_events(&self, max_items: usize) -> Vec<Value> {
+        let path = self.config_dir.join("audit.jsonl");
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return Vec::new();
+        };
+        let mut items: Vec<Value> = raw
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+            .collect();
+        if items.len() > max_items {
+            items.drain(..items.len() - max_items);
+        }
+        items.reverse();
+        items
     }
 
     pub fn master(&self) -> &MasterKeys {
@@ -604,7 +977,8 @@ impl RuntimeStore {
         false
     }
 
-    /// Constant-time check of an MCP Bearer token against enabled `keys.json` entries OR admin key.
+    /// Constant-time check of an MCP Bearer token against enabled `keys.json`, active inbound
+    /// `connectors.json` entries, OR admin key.
     pub fn validate_api_key(&self, token: &str) -> bool {
         let tok = token.trim();
         if tok.is_empty() {
@@ -621,6 +995,11 @@ impl RuntimeStore {
                 matched = true;
             }
         }
+        for conn in &g.connectors {
+            if conn.enabled && self.master.api_key_matches(tok, &conn.token_hash) {
+                matched = true;
+            }
+        }
         matched
     }
 
@@ -632,15 +1011,35 @@ impl RuntimeStore {
             .len()
     }
 
+    pub fn connectors_count(&self) -> usize {
+        self.inner
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .connectors
+            .len()
+    }
+
     pub fn list_keys(&self) -> Vec<ApiKeyPublicView> {
         let g = self.inner.read().unwrap_or_else(|p| p.into_inner());
-        g.keys.iter().map(StoredApiKey::to_public_view).collect()
+        g.keys
+            .iter()
+            .map(|k| k.to_public_view(g.vault.api_keys.contains_key(&k.id)))
+            .collect()
     }
 
     pub fn create_key(
         &self,
         label: &str,
         custom_secret: Option<&str>,
+    ) -> Result<(Zeroizing<String>, ApiKeyPublicView), CryptoError> {
+        self.create_key_with_scopes(label, custom_secret, None)
+    }
+
+    pub fn create_key_with_scopes(
+        &self,
+        label: &str,
+        custom_secret: Option<&str>,
+        scopes: Option<Vec<String>>,
     ) -> Result<(Zeroizing<String>, ApiKeyPublicView), CryptoError> {
         let clean_label = {
             let t = label.trim();
@@ -650,28 +1049,86 @@ impl RuntimeStore {
                 t.chars().take(120).collect()
             }
         };
+        let clean_scopes = scopes
+            .map(|s| {
+                s.into_iter()
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(default_key_scopes);
         let raw = Zeroizing::new(match custom_secret.map(str::trim).filter(|s| !s.is_empty()) {
             Some(c) => c.to_string(),
             None => crypto::generate_api_token("styles"),
         });
+        let id = crypto::random_hex(6);
         let key_hash = self.master.api_key_hash(&raw);
         let (prefix, last4) = crypto::extract_prefix_and_last4(&raw);
+        let enc_box = self.master.seal(&format!("api_keys.{id}.secret"), &raw)?;
         let stored = StoredApiKey {
-            id: crypto::random_hex(6),
+            id: id.clone(),
             label: clean_label,
             key_hash,
             prefix,
             last4,
             enabled: true,
+            source: "runtime".to_string(),
+            scopes: clean_scopes,
             created: now_iso8601(),
             rotated_at: None,
             revoked_at: None,
         };
-        let view = stored.to_public_view();
+        let view = stored.to_public_view(true);
         let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
         g.keys.push(stored);
+        g.vault.api_keys.insert(id, enc_box);
         save_keys_file(&self.config_dir.join("keys.json"), &g.keys)?;
+        save_vault_file(&self.config_dir.join("vault.json"), &g.vault)?;
         Ok((raw, view))
+    }
+
+    pub fn update_key(
+        &self,
+        key_id: &str,
+        label: Option<&str>,
+        scopes: Option<Vec<String>>,
+    ) -> Result<Option<ApiKeyPublicView>, CryptoError> {
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let Some(idx) = g.keys.iter().position(|k| k.id == key_id) else {
+            return Ok(None);
+        };
+        if let Some(new_label) = label.map(str::trim).filter(|s| !s.is_empty()) {
+            g.keys[idx].label = new_label.chars().take(120).collect();
+        }
+        if let Some(new_scopes) = scopes {
+            let clean: Vec<String> = new_scopes
+                .into_iter()
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .collect();
+            if !clean.is_empty() {
+                g.keys[idx].scopes = clean;
+            }
+        }
+        let copy_ok = g.vault.api_keys.contains_key(key_id);
+        let view = g.keys[idx].to_public_view(copy_ok);
+        save_keys_file(&self.config_dir.join("keys.json"), &g.keys)?;
+        Ok(Some(view))
+    }
+
+    pub fn copy_key(&self, key_id: &str) -> Result<CopySecretOutcome, CryptoError> {
+        let g = self.inner.read().unwrap_or_else(|p| p.into_inner());
+        let Some(_entry) = g.keys.iter().find(|k| k.id == key_id) else {
+            return Ok(CopySecretOutcome::NotFound);
+        };
+        let Some(env_box) = g.vault.api_keys.get(key_id) else {
+            return Ok(CopySecretOutcome::LegacyHashOnly);
+        };
+        let secret = self
+            .master
+            .open(&format!("api_keys.{key_id}.secret"), env_box)?;
+        Ok(CopySecretOutcome::Secret(Zeroizing::new(secret)))
     }
 
     pub fn rotate_key(
@@ -680,7 +1137,7 @@ impl RuntimeStore {
         custom_secret: Option<&str>,
     ) -> Result<Option<(Zeroizing<String>, ApiKeyPublicView)>, CryptoError> {
         let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
-        let Some(entry) = g.keys.iter_mut().find(|k| k.id == key_id) else {
+        let Some(idx) = g.keys.iter().position(|k| k.id == key_id) else {
             return Ok(None);
         };
         let raw = Zeroizing::new(match custom_secret.map(str::trim).filter(|s| !s.is_empty()) {
@@ -688,14 +1145,21 @@ impl RuntimeStore {
             None => crypto::generate_api_token("styles"),
         });
         let (prefix, last4) = crypto::extract_prefix_and_last4(&raw);
-        entry.key_hash = self.master.api_key_hash(&raw);
-        entry.prefix = prefix;
-        entry.last4 = last4;
-        entry.enabled = true;
-        entry.rotated_at = Some(now_iso8601());
-        entry.revoked_at = None;
-        let view = entry.to_public_view();
+        let key_hash = self.master.api_key_hash(&raw);
+        let enc_box = self
+            .master
+            .seal(&format!("api_keys.{key_id}.secret"), &raw)?;
+        g.keys[idx].key_hash = key_hash;
+        g.keys[idx].prefix = prefix;
+        g.keys[idx].last4 = last4;
+        g.keys[idx].enabled = true;
+        g.keys[idx].source = "runtime".to_string();
+        g.keys[idx].rotated_at = Some(now_iso8601());
+        g.keys[idx].revoked_at = None;
+        let view = g.keys[idx].to_public_view(true);
+        g.vault.api_keys.insert(key_id.to_string(), enc_box);
         save_keys_file(&self.config_dir.join("keys.json"), &g.keys)?;
+        save_vault_file(&self.config_dir.join("vault.json"), &g.vault)?;
         Ok(Some((raw, view)))
     }
 
@@ -705,12 +1169,13 @@ impl RuntimeStore {
         revoke: bool,
     ) -> Result<Option<ApiKeyPublicView>, CryptoError> {
         let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
-        let Some(entry) = g.keys.iter_mut().find(|k| k.id == key_id) else {
+        let Some(idx) = g.keys.iter().position(|k| k.id == key_id) else {
             return Ok(None);
         };
-        entry.enabled = !revoke;
-        entry.revoked_at = if revoke { Some(now_iso8601()) } else { None };
-        let view = entry.to_public_view();
+        g.keys[idx].enabled = !revoke;
+        g.keys[idx].revoked_at = if revoke { Some(now_iso8601()) } else { None };
+        let copy_ok = g.vault.api_keys.contains_key(key_id);
+        let view = g.keys[idx].to_public_view(copy_ok);
         save_keys_file(&self.config_dir.join("keys.json"), &g.keys)?;
         Ok(Some(view))
     }
@@ -719,11 +1184,264 @@ impl RuntimeStore {
         let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
         let before = g.keys.len();
         g.keys.retain(|k| k.id != key_id);
-        if g.keys.len() < before {
+        let removed_vault = g.vault.api_keys.remove(key_id).is_some();
+        if g.keys.len() < before || removed_vault {
             save_keys_file(&self.config_dir.join("keys.json"), &g.keys)?;
+            if removed_vault {
+                save_vault_file(&self.config_dir.join("vault.json"), &g.vault)?;
+            }
             return Ok(true);
         }
         Ok(false)
+    }
+
+    // --- MCP Connectors CRUD + Copy · Rotate · Revoke · Remove ---
+
+    pub fn list_connectors(&self, endpoint_url: &str) -> Vec<McpConnectorPublicView> {
+        let g = self.inner.read().unwrap_or_else(|p| p.into_inner());
+        g.connectors
+            .iter()
+            .map(|c| {
+                c.to_public_view(
+                    endpoint_url,
+                    g.vault.mcp_connectors.contains_key(&c.id),
+                )
+            })
+            .collect()
+    }
+
+    pub fn create_connector(
+        &self,
+        name: &str,
+        audience: &str,
+        scopes: Vec<String>,
+        custom_secret: Option<&str>,
+        endpoint_url: &str,
+    ) -> Result<(Zeroizing<String>, McpConnectorPublicView), CryptoError> {
+        let clean_name = {
+            let t = name.trim();
+            if t.is_empty() {
+                "Inbound MCP Connector".to_string()
+            } else {
+                t.chars().take(120).collect()
+            }
+        };
+        let clean_aud = {
+            let a = audience.trim();
+            if a.is_empty() {
+                "styles-mcp".to_string()
+            } else {
+                a.chars().take(120).collect()
+            }
+        };
+        let clean_scopes: Vec<String> = scopes
+            .into_iter()
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect();
+        let clean_scopes = if clean_scopes.is_empty() {
+            default_key_scopes()
+        } else {
+            clean_scopes
+        };
+        let raw = Zeroizing::new(
+            match custom_secret
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && *s != crypto::MASK)
+            {
+                Some(c) => c.to_string(),
+                None => crypto::generate_api_token("styles_mcp"),
+            },
+        );
+        let id = format!("mcp_{}", crypto::random_hex(5));
+        let token_hash = self.master.api_key_hash(&raw);
+        let (prefix, last4) = crypto::extract_prefix_and_last4(&raw);
+        let enc_box = self
+            .master
+            .seal(&format!("mcp_connectors.{id}.secret"), &raw)?;
+        let stored = StoredMcpConnector {
+            id: id.clone(),
+            name: clean_name,
+            direction: "inbound".to_string(),
+            transport: "streamable_http".to_string(),
+            audience: clean_aud,
+            scopes: clean_scopes,
+            token_hash,
+            prefix,
+            last4,
+            enabled: true,
+            source: "runtime".to_string(),
+            created: now_iso8601(),
+            rotated_at: None,
+            revoked_at: None,
+        };
+        let view = stored.to_public_view(endpoint_url, true);
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        g.connectors.push(stored);
+        g.vault.mcp_connectors.insert(id, enc_box);
+        save_connectors_file(&self.config_dir.join("connectors.json"), &g.connectors)?;
+        save_vault_file(&self.config_dir.join("vault.json"), &g.vault)?;
+        Ok((raw, view))
+    }
+
+    pub fn update_connector(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        audience: Option<&str>,
+        scopes: Option<Vec<String>>,
+        custom_secret: Option<&str>,
+        endpoint_url: &str,
+    ) -> Result<Result<McpConnectorPublicView, ConnectorMutationError>, CryptoError> {
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let Some(idx) = g.connectors.iter().position(|c| c.id == id) else {
+            return Ok(Err(ConnectorMutationError::NotFound));
+        };
+        if g.connectors[idx].source == "env" {
+            return Ok(Err(ConnectorMutationError::EnvManaged));
+        }
+        if let Some(n) = name.map(str::trim).filter(|s| !s.is_empty()) {
+            g.connectors[idx].name = n.chars().take(120).collect();
+        }
+        if let Some(a) = audience.map(str::trim).filter(|s| !s.is_empty()) {
+            g.connectors[idx].audience = a.chars().take(120).collect();
+        }
+        if let Some(sc) = scopes {
+            let clean: Vec<String> = sc
+                .into_iter()
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .collect();
+            if !clean.is_empty() {
+                g.connectors[idx].scopes = clean;
+            }
+        }
+        // `omitBlankSecrets`: ignore blank or `"********"`
+        let mut vault_dirty = false;
+        if let Some(sec) = custom_secret
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != crypto::MASK)
+        {
+            let (prefix, last4) = crypto::extract_prefix_and_last4(sec);
+            let token_hash = self.master.api_key_hash(sec);
+            let enc_box = self
+                .master
+                .seal(&format!("mcp_connectors.{id}.secret"), sec)?;
+            g.connectors[idx].token_hash = token_hash;
+            g.connectors[idx].prefix = prefix;
+            g.connectors[idx].last4 = last4;
+            g.connectors[idx].rotated_at = Some(now_iso8601());
+            g.vault.mcp_connectors.insert(id.to_string(), enc_box);
+            vault_dirty = true;
+        }
+        let copy_ok = g.vault.mcp_connectors.contains_key(id);
+        let view = g.connectors[idx].to_public_view(endpoint_url, copy_ok);
+        save_connectors_file(&self.config_dir.join("connectors.json"), &g.connectors)?;
+        if vault_dirty {
+            save_vault_file(&self.config_dir.join("vault.json"), &g.vault)?;
+        }
+        Ok(Ok(view))
+    }
+
+    pub fn copy_connector(&self, id: &str) -> Result<CopySecretOutcome, CryptoError> {
+        let g = self.inner.read().unwrap_or_else(|p| p.into_inner());
+        let Some(_conn) = g.connectors.iter().find(|c| c.id == id) else {
+            return Ok(CopySecretOutcome::NotFound);
+        };
+        let Some(env_box) = g.vault.mcp_connectors.get(id) else {
+            return Ok(CopySecretOutcome::LegacyHashOnly);
+        };
+        let secret = self
+            .master
+            .open(&format!("mcp_connectors.{id}.secret"), env_box)?;
+        Ok(CopySecretOutcome::Secret(Zeroizing::new(secret)))
+    }
+
+    pub fn rotate_connector(
+        &self,
+        id: &str,
+        custom_secret: Option<&str>,
+        endpoint_url: &str,
+    ) -> Result<Result<(Zeroizing<String>, McpConnectorPublicView), ConnectorMutationError>, CryptoError>
+    {
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let Some(idx) = g.connectors.iter().position(|c| c.id == id) else {
+            return Ok(Err(ConnectorMutationError::NotFound));
+        };
+        if g.connectors[idx].source == "env" {
+            return Ok(Err(ConnectorMutationError::EnvManaged));
+        }
+        let raw = Zeroizing::new(
+            match custom_secret
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && *s != crypto::MASK)
+            {
+                Some(c) => c.to_string(),
+                None => crypto::generate_api_token("styles_mcp"),
+            },
+        );
+        let (prefix, last4) = crypto::extract_prefix_and_last4(&raw);
+        let token_hash = self.master.api_key_hash(&raw);
+        let enc_box = self
+            .master
+            .seal(&format!("mcp_connectors.{id}.secret"), &raw)?;
+        g.connectors[idx].token_hash = token_hash;
+        g.connectors[idx].prefix = prefix;
+        g.connectors[idx].last4 = last4;
+        g.connectors[idx].enabled = true;
+        g.connectors[idx].rotated_at = Some(now_iso8601());
+        g.connectors[idx].revoked_at = None;
+        let view = g.connectors[idx].to_public_view(endpoint_url, true);
+        g.vault.mcp_connectors.insert(id.to_string(), enc_box);
+        save_connectors_file(&self.config_dir.join("connectors.json"), &g.connectors)?;
+        save_vault_file(&self.config_dir.join("vault.json"), &g.vault)?;
+        Ok(Ok((raw, view)))
+    }
+
+    pub fn revoke_connector(
+        &self,
+        id: &str,
+        revoke: bool,
+        endpoint_url: &str,
+    ) -> Result<Result<McpConnectorPublicView, ConnectorMutationError>, CryptoError> {
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let Some(idx) = g.connectors.iter().position(|c| c.id == id) else {
+            return Ok(Err(ConnectorMutationError::NotFound));
+        };
+        if g.connectors[idx].source == "env" {
+            return Ok(Err(ConnectorMutationError::EnvManaged));
+        }
+        g.connectors[idx].enabled = !revoke;
+        g.connectors[idx].revoked_at = if revoke { Some(now_iso8601()) } else { None };
+        let copy_ok = g.vault.mcp_connectors.contains_key(id);
+        let view = g.connectors[idx].to_public_view(endpoint_url, copy_ok);
+        save_connectors_file(&self.config_dir.join("connectors.json"), &g.connectors)?;
+        Ok(Ok(view))
+    }
+
+    pub fn delete_connector(&self, id: &str) -> Result<Result<(), ConnectorMutationError>, CryptoError> {
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let Some(idx) = g.connectors.iter().position(|c| c.id == id) else {
+            return Ok(Err(ConnectorMutationError::NotFound));
+        };
+        if g.connectors[idx].source == "env" {
+            return Ok(Err(ConnectorMutationError::EnvManaged));
+        }
+        g.connectors.remove(idx);
+        let removed_vault = g.vault.mcp_connectors.remove(id).is_some();
+        save_connectors_file(&self.config_dir.join("connectors.json"), &g.connectors)?;
+        if removed_vault {
+            save_vault_file(&self.config_dir.join("vault.json"), &g.vault)?;
+        }
+        Ok(Ok(()))
+    }
+
+    pub fn connector_status(&self, id: &str) -> Option<(bool, Vec<String>, String)> {
+        let g = self.inner.read().unwrap_or_else(|p| p.into_inner());
+        g.connectors
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| (c.enabled, c.scopes.clone(), c.audience.clone()))
     }
 
     pub fn masked_settings_dict(&self, settings: &AppSettings, oidc_enabled: bool) -> Value {
@@ -757,6 +1475,15 @@ impl RuntimeStore {
             "api_key_configured": api_key_configured,
             "api_key_masked": self.mgmt_key_masked(),
             "session_epoch": self.session_epoch(),
+            "session_idle_ttl_seconds": settings.session_ttl.idle_ttl_secs,
+            "session_max_ttl_seconds": settings.session_ttl.max_ttl_secs,
+            "cookie_secure": settings.cookie_secure,
+            "master_key_configured": settings.master_key_configured,
+            "master_key_old_configured": settings.master_key_old_configured,
+            "rewrapped_from_old_key": self.rewrapped_from_old_key,
+            "connector_audience": settings.connector_audience,
+            "connector_max_scopes": settings.connector_max_scopes,
+            "connector_delegation_configured": settings.connector_delegation_configured,
             "auto_warm_cache": settings.auto_warm_cache,
         })
     }
@@ -765,17 +1492,19 @@ impl RuntimeStore {
 fn load_and_migrate_config(
     path: &Path,
     master: &MasterKeys,
-) -> Result<(PersistedConfig, bool), CryptoError> {
+    old_master: Option<&MasterKeys>,
+) -> Result<(PersistedConfig, bool, bool), CryptoError> {
     if !path.exists() {
-        return Ok((PersistedConfig::default(), false));
+        return Ok((PersistedConfig::default(), false, false));
     }
     let raw_text = std::fs::read_to_string(path).map_err(|e| CryptoError::Io(e.to_string()))?;
     let val: Value = match serde_json::from_str(&raw_text) {
         Ok(v) => v,
-        Err(_) => return Ok((PersistedConfig::default(), true)),
+        Err(_) => return Ok((PersistedConfig::default(), true, false)),
     };
     let mut cfg: PersistedConfig = serde_json::from_value(val.clone()).unwrap_or_default();
     let mut dirty = false;
+    let mut rewrapped = false;
 
     if let Some(obj) = val.as_object() {
         // Scrub any legacy plaintext mgmt_key / api_key stored on disk.
@@ -803,16 +1532,64 @@ fn load_and_migrate_config(
             dirty = true;
         }
     }
+    if let Some(ref enc_val) = cfg.oidc_client_secret_enc {
+        let (pt, used_old) =
+            master.open_with_old(old_master, "config.oidc_client_secret", enc_val)?;
+        if used_old {
+            cfg.oidc_client_secret_enc = Some(master.seal("config.oidc_client_secret", &pt)?);
+            dirty = true;
+            rewrapped = true;
+        }
+    }
     if cfg.version < 2 {
         cfg.version = 2;
         dirty = true;
     }
-    Ok((cfg, dirty))
+    Ok((cfg, dirty, rewrapped))
+}
+
+fn load_vault_file(
+    path: &Path,
+    master: &MasterKeys,
+    old_master: Option<&MasterKeys>,
+) -> Result<(VaultFile, bool, bool), CryptoError> {
+    if !path.exists() {
+        return Ok((VaultFile::default(), false, false));
+    }
+    let raw_text = Zeroizing::new(
+        std::fs::read_to_string(path).map_err(|e| CryptoError::Io(e.to_string()))?,
+    );
+    let mut vault: VaultFile = serde_json::from_str(&raw_text)
+        .map_err(|e| CryptoError::InvalidEnvelope(format!("vault.json: {e}")))?;
+    let mut dirty = false;
+    let mut rewrapped = false;
+
+    for (id, env_val) in vault.api_keys.iter_mut() {
+        let aad = format!("api_keys.{id}.secret");
+        let (pt, used_old) = master.open_with_old(old_master, &aad, env_val)?;
+        if used_old {
+            *env_val = master.seal(&aad, &pt)?;
+            dirty = true;
+            rewrapped = true;
+        }
+    }
+    for (id, env_val) in vault.mcp_connectors.iter_mut() {
+        let aad = format!("mcp_connectors.{id}.secret");
+        let (pt, used_old) = master.open_with_old(old_master, &aad, env_val)?;
+        if used_old {
+            *env_val = master.seal(&aad, &pt)?;
+            dirty = true;
+            rewrapped = true;
+        }
+    }
+    Ok((vault, dirty, rewrapped))
 }
 
 fn load_and_migrate_keys(
     path: &Path,
     master: &MasterKeys,
+    vault: &mut VaultFile,
+    vault_dirty: &mut bool,
 ) -> Result<(Vec<StoredApiKey>, bool), CryptoError> {
     if !path.exists() {
         return Ok((Vec::new(), false));
@@ -852,6 +1629,24 @@ fn load_and_migrate_keys(
             .unwrap_or("Migrated API Key")
             .to_string();
         let enabled = obj.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+        let source = obj
+            .get("source")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("runtime")
+            .to_string();
+        let scopes = obj
+            .get("scopes")
+            .and_then(Value::as_array)
+            .map(|xs| {
+                xs.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|xs| !xs.is_empty())
+            .unwrap_or_else(default_key_scopes);
         let created = obj
             .get("created")
             .and_then(Value::as_str)
@@ -868,7 +1663,7 @@ fn load_and_migrate_keys(
             .filter(|s| !s.is_empty())
             .map(str::to_string);
 
-        // Detect legacy Python plaintext `"key"` or `"raw_key"` and hash + scrub!
+        // Detect legacy Python plaintext `"key"` or `"raw_key"` and hash + encrypt into vault.json!
         let legacy_plain = obj
             .get("key")
             .and_then(Value::as_str)
@@ -879,6 +1674,9 @@ fn load_and_migrate_keys(
         if let Some(plain) = legacy_plain {
             let key_hash = master.api_key_hash(plain);
             let (prefix, last4) = crypto::extract_prefix_and_last4(plain);
+            let enc_box = master.seal(&format!("api_keys.{id}.secret"), plain)?;
+            vault.api_keys.insert(id.clone(), enc_box);
+            *vault_dirty = true;
             out.push(StoredApiKey {
                 id,
                 label,
@@ -886,6 +1684,8 @@ fn load_and_migrate_keys(
                 prefix,
                 last4,
                 enabled,
+                source,
+                scopes,
                 created,
                 rotated_at,
                 revoked_at,
@@ -914,6 +1714,8 @@ fn load_and_migrate_keys(
                 prefix,
                 last4,
                 enabled,
+                source,
+                scopes,
                 created,
                 rotated_at,
                 revoked_at,
@@ -928,6 +1730,48 @@ fn load_and_migrate_keys(
     Ok((out, migrated))
 }
 
+fn load_and_migrate_connectors(
+    path: &Path,
+    master: &MasterKeys,
+    vault: &mut VaultFile,
+    vault_dirty: &mut bool,
+) -> Result<(Vec<StoredMcpConnector>, bool), CryptoError> {
+    if !path.exists() {
+        return Ok((Vec::new(), false));
+    }
+    let raw_text = Zeroizing::new(
+        std::fs::read_to_string(path).map_err(|e| CryptoError::Io(e.to_string()))?,
+    );
+    let mut parsed: ConnectorsFile = match serde_json::from_str(&raw_text) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to parse connectors.json; starting empty");
+            return Ok((Vec::new(), false));
+        }
+    };
+    let mut dirty = false;
+    for conn in &mut parsed.connectors {
+        if conn.id.is_empty() {
+            conn.id = format!("mcp_{}", crypto::random_hex(5));
+            dirty = true;
+        }
+        if !vault.mcp_connectors.contains_key(&conn.id) && conn.token_hash.is_empty() {
+            let raw = Zeroizing::new(crypto::generate_api_token("styles_mcp"));
+            let (prefix, last4) = crypto::extract_prefix_and_last4(&raw);
+            conn.token_hash = master.api_key_hash(&raw);
+            conn.prefix = prefix;
+            conn.last4 = last4;
+            vault.mcp_connectors.insert(
+                conn.id.clone(),
+                master.seal(&format!("mcp_connectors.{}.secret", conn.id), &raw)?,
+            );
+            *vault_dirty = true;
+            dirty = true;
+        }
+    }
+    Ok((parsed.connectors, dirty))
+}
+
 fn save_config_file(path: &Path, cfg: &PersistedConfig) -> Result<(), CryptoError> {
     let bytes = serde_json::to_vec_pretty(cfg).map_err(|e| CryptoError::Io(e.to_string()))?;
     crypto::write_private_file_atomic(path, &bytes)
@@ -939,6 +1783,23 @@ fn save_keys_file(path: &Path, keys: &[StoredApiKey]) -> Result<(), CryptoError>
         api_keys: keys.to_vec(),
     };
     let bytes = serde_json::to_vec_pretty(&payload).map_err(|e| CryptoError::Io(e.to_string()))?;
+    crypto::write_private_file_atomic(path, &bytes)
+}
+
+fn save_connectors_file(
+    path: &Path,
+    connectors: &[StoredMcpConnector],
+) -> Result<(), CryptoError> {
+    let payload = ConnectorsFile {
+        version: 1,
+        connectors: connectors.to_vec(),
+    };
+    let bytes = serde_json::to_vec_pretty(&payload).map_err(|e| CryptoError::Io(e.to_string()))?;
+    crypto::write_private_file_atomic(path, &bytes)
+}
+
+fn save_vault_file(path: &Path, vault: &VaultFile) -> Result<(), CryptoError> {
+    let bytes = serde_json::to_vec_pretty(vault).map_err(|e| CryptoError::Io(e.to_string()))?;
     crypto::write_private_file_atomic(path, &bytes)
 }
 
@@ -1025,5 +1886,133 @@ mod tests {
         assert!(store.delete_key(&v1.id).unwrap());
         assert!(!store.validate_api_key(&raw2));
         assert_eq!(store.keys_count(), 0);
+    }
+
+    #[test]
+    fn vault_copy_key_and_master_key_rotation_rewrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_hex = "1111111111111111111111111111111111111111111111111111111111111111";
+        let old_master = MasterKeys::from_encoded(old_hex).unwrap();
+        let store1 =
+            RuntimeStore::load_or_init(dir.path(), old_master, &EnvSnapshot::default()).unwrap();
+        assert!(!store1.rewrapped_from_old_key());
+
+        let (raw1, k1) = store1.create_key("Vault Key", None).unwrap();
+        assert!(k1.copy_available);
+        match store1.copy_key(&k1.id).unwrap() {
+            CopySecretOutcome::Secret(s) => assert_eq!(*s, *raw1),
+            other => panic!("unexpected copy outcome: {other:?}"),
+        }
+
+        // Seed a legacy hash-only key without vault.json entry -> returns LegacyHashOnly
+        let legacy_hash_only = StoredApiKey {
+            id: "legacy_hash_1".to_string(),
+            label: "Legacy Hash Only".to_string(),
+            key_hash: "deadbeef".to_string(),
+            prefix: "styles_old".to_string(),
+            last4: "9999".to_string(),
+            enabled: true,
+            source: "migrated".to_string(),
+            scopes: default_key_scopes(),
+            created: now_iso8601(),
+            rotated_at: None,
+            revoked_at: None,
+        };
+        let mut keys_disk: KeysFile =
+            serde_json::from_str(&std::fs::read_to_string(dir.path().join("keys.json")).unwrap())
+                .unwrap();
+        keys_disk.api_keys.push(legacy_hash_only);
+        save_keys_file(&dir.path().join("keys.json"), &keys_disk.api_keys).unwrap();
+
+        // Booting with wrong key WITHOUT LNC_MASTER_KEY_OLD must fail closed.
+        let new_master = MasterKeys::from_encoded(HEX_KEY).unwrap();
+        assert!(RuntimeStore::load_or_init(
+            dir.path(),
+            new_master.clone(),
+            &EnvSnapshot::default()
+        )
+        .is_err());
+
+        // Booting with LNC_MASTER_KEY_OLD re-wraps vault.json cleanly.
+        let env_rot = EnvSnapshot::from_pairs([("LNC_MASTER_KEY_OLD", old_hex)]);
+        let store2 = RuntimeStore::load_or_init(dir.path(), new_master.clone(), &env_rot).unwrap();
+        assert!(store2.rewrapped_from_old_key());
+
+        // Subsequent boot WITHOUT LNC_MASTER_KEY_OLD succeeds cleanly!
+        let store3 =
+            RuntimeStore::load_or_init(dir.path(), new_master, &EnvSnapshot::default()).unwrap();
+        assert!(!store3.rewrapped_from_old_key());
+        match store3.copy_key(&k1.id).unwrap() {
+            CopySecretOutcome::Secret(s) => assert_eq!(*s, *raw1),
+            other => panic!("unexpected copy outcome after rotation: {other:?}"),
+        }
+        assert_eq!(
+            store3.copy_key("legacy_hash_1").unwrap(),
+            CopySecretOutcome::LegacyHashOnly
+        );
+    }
+
+    #[test]
+    fn connector_lifecycle_and_env_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let master = MasterKeys::from_encoded(HEX_KEY).unwrap();
+        let env = EnvSnapshot::from_pairs([("CONNECTOR_BEARER", "styles_env_connector_bearer_001")]);
+        let store = RuntimeStore::load_or_init(dir.path(), master, &env).unwrap();
+
+        assert!(store.validate_api_key("styles_env_connector_bearer_001"));
+        // Env-managed connector supports Copy, rejects Rotate/Revoke/Delete
+        match store.copy_connector("mcp_env_bearer").unwrap() {
+            CopySecretOutcome::Secret(s) => assert_eq!(&*s, "styles_env_connector_bearer_001"),
+            other => panic!("unexpected copy: {other:?}"),
+        }
+        assert_eq!(
+            store
+                .rotate_connector("mcp_env_bearer", None, "https://styles.lengoc.me/mcp")
+                .unwrap()
+                .unwrap_err(),
+            ConnectorMutationError::EnvManaged
+        );
+
+        let (rt_sec, rt_conn) = store
+            .create_connector(
+                "Claude Desktop",
+                "styles-mcp",
+                vec!["mcp:read".into()],
+                None,
+                "https://styles.lengoc.me/mcp",
+            )
+            .unwrap();
+        assert!(store.validate_api_key(&rt_sec));
+
+        // omitBlankSecrets: passing "********" preserves current secret
+        let upd = store
+            .update_connector(
+                &rt_conn.id,
+                Some("Claude Desktop Updated"),
+                None,
+                None,
+                Some(crypto::MASK),
+                "https://styles.lengoc.me/mcp",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(upd.name, "Claude Desktop Updated");
+        assert!(store.validate_api_key(&rt_sec));
+
+        let (rot_sec, _) = store
+            .rotate_connector(&rt_conn.id, None, "https://styles.lengoc.me/mcp")
+            .unwrap()
+            .unwrap();
+        assert!(!store.validate_api_key(&rt_sec));
+        assert!(store.validate_api_key(&rot_sec));
+
+        let rev = store
+            .revoke_connector(&rt_conn.id, true, "https://styles.lengoc.me/mcp")
+            .unwrap()
+            .unwrap();
+        assert!(!rev.enabled);
+        assert!(!store.validate_api_key(&rot_sec));
+
+        store.delete_connector(&rt_conn.id).unwrap().unwrap();
     }
 }

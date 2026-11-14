@@ -1,8 +1,8 @@
 {
   "service": "lnc-styles-gallery",
-  "version": "1.0.0.0",
+  "version": "1.0.0.1",
   "track": "Track M (Migration & Security Hardening)",
-  "generated_at": "2026-11-14T05:04:24Z",
+  "generated_at": "2026-11-14T20:36:04Z",
   "total_score": 100.0,
   "verdict": "RELEASE_READY (SHIP / CUTOVER)",
   "hard_fail": "CLEAR",
@@ -13,12 +13,12 @@
     "low": 0
   },
   "metrics": {
-    "binary_size_bytes": 6929920,
-    "boot_ms": 511.78,
-    "idle_rss_mb": 8.32,
-    "p50_ms": 0.52,
-    "p95_ms": 15.95,
-    "post_load_rss_mb": 8.57
+    "binary_size_bytes": 7356928,
+    "boot_ms": 521.21,
+    "idle_rss_mb": 8.49,
+    "p50_ms": 1.4,
+    "p95_ms": 22.36,
+    "post_load_rss_mb": 8.9
   },
   "checks": [
     {
@@ -27,7 +27,7 @@
       "title": "Compiled release binary & built React SPA bundle present",
       "passed": true,
       "severity": "Critical",
-      "detail": "binary=6,929,920 bytes, ui/dist/index.html=True"
+      "detail": "binary=7,356,928 bytes, ui/dist/index.html=True"
     },
     {
       "category": "security",
@@ -35,7 +35,7 @@
       "title": "Compiled SPA bundle contains zero `raw_key` references",
       "passed": true,
       "severity": "High",
-      "detail": "raw_key_in_dist=False, sample_bundle=/static/admin-DE0xNSRr.js"
+      "detail": "raw_key_in_dist=False, sample_bundle=/static/admin-BXVMU7f3.js"
     },
     {
       "category": "health",
@@ -43,7 +43,7 @@
       "title": "Server boots cleanly on ephemeral PORT and serves /health",
       "passed": true,
       "severity": "Critical",
-      "detail": "boot_ms=511.78ms, idle_rss=8.32MB"
+      "detail": "boot_ms=521.21ms, idle_rss=8.49MB"
     },
     {
       "category": "health",
@@ -56,10 +56,10 @@
     {
       "category": "health",
       "id": "H04",
-      "title": "Version 1.0.0.0, corpus counts, p95 latency (<50ms) & RSS (<80MB)",
+      "title": "Version 1.0.0.1, corpus counts, p95 latency (<50ms) & RSS (<80MB)",
       "passed": true,
       "severity": "High",
-      "detail": "v=1.0.0.0, styles=3, p50=0.52ms, p95=15.95ms, rss=8.57MB"
+      "detail": "v=1.0.0.1, styles=3, p50=1.4ms, p95=22.36ms, rss=8.9MB"
     },
     {
       "category": "journeys",
@@ -123,7 +123,7 @@
       "title": "/login.html OIDC SSO primary + collapsed `<details>` break-glass + strict headers/CSP",
       "passed": true,
       "severity": "High",
-      "detail": "xfo=SAMEORIGIN, nosniff=nosniff"
+      "detail": "xfo=DENY, nosniff=nosniff"
     },
     {
       "category": "security",
@@ -131,23 +131,23 @@
       "title": "OIDC PKCE S256 + RS256 JWKS + nonce + allowlist + state tamper rejection",
       "passed": true,
       "severity": "Critical",
-      "detail": "oidc_user=kc-louis, deny_loc=/login.html?error=not_allowed"
+      "detail": "oidc_user=kc-louis, deny_loc=/login.html?oidc_error=not_allowed&error=not_allowed"
     },
     {
       "category": "security",
       "id": "S06",
-      "title": "Zero-F12-Leak key lifecycle (one-time create/rotate, masked GET, 410 on /copy, revoke/delete)",
+      "title": "Zero-F12-Leak vault key & MCP connector lifecycle (masked GET, HKDF POST /copy + 15/5m 429, 405 GET /copy, legacy 410, rotate/revoke/delete)",
       "passed": true,
       "severity": "Critical",
-      "detail": "copy_status=410, old_tok=401, rot_tok=200, revoked_tok=401"
+      "detail": "copy=(200,200,429=True), legacy410=True, conn=(200,200,200,200)"
     },
     {
       "category": "security",
       "id": "S07",
-      "title": "CSRF Origin guard (403), SSRF metadata block (400) & revoke-all session_epoch invalidation",
+      "title": "CSRF Origin+Token guard (403/405), ?token= 400 block, SSRF metadata block (400) & revoke-all session_epoch invalidation",
       "passed": true,
       "severity": "High",
-      "detail": "csrf=403, ssrf=(400,400), post_revoke_all=401"
+      "detail": "csrf=403, logout=(405,403,403,200), q=(400,400,400), ssrf=(400,400), post_revoke_all=401"
     },
     {
       "category": "security",
@@ -155,7 +155,7 @@
       "title": "Break-glass Argon2id login succeeds & 9th failed attempt returns 429 + Retry-After",
       "passed": true,
       "severity": "High",
-      "detail": "mgmt_login=200, 9th_status=429, retry_after=300s"
+      "detail": "mgmt_login=200, 9th_status=429, retry_after=299s"
     },
     {
       "category": "security",

@@ -340,7 +340,7 @@ pub fn handle_jsonrpc_message(
 fn check_mcp_auth(
     state: &AppState,
     headers: &HeaderMap,
-    query: &HashMap<String, String>,
+    _query: &HashMap<String, String>,
 ) -> Result<(), Response> {
     if !state.settings.mcp_auth_required {
         return Ok(());
@@ -355,8 +355,13 @@ fn check_mcp_auth(
         }
     }
     if token.is_empty() {
-        if let Some(q_tok) = query.get("token") {
-            token = q_tok.trim().to_string();
+        if let Some(x) = headers
+            .get("x-api-key")
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            token = x.to_string();
         }
     }
     if !state.runtime.validate_api_key(&token) {

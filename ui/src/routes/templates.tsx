@@ -22,6 +22,7 @@ import { StatCard } from "@/components/common/StatCard"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { copyText } from "@/lib/clipboard"
 import {
   Dialog,
   DialogContent,
@@ -87,12 +88,12 @@ function TemplatesPage() {
       toast.error("No prompt available to copy")
       return
     }
-    try {
-      await navigator.clipboard.writeText(promptText)
+    const ok = await copyText(promptText)
+    if (ok) {
       setCopiedPrompt(true)
       toast.success(`Copied generation prompt for ${selectedTemplate?.id}`)
       setTimeout(() => setCopiedPrompt(false), 2000)
-    } catch {
+    } else {
       toast.error("Clipboard copy failed")
     }
   }

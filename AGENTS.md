@@ -2,47 +2,45 @@
 
 ## 1. Architecture Overview (Shape A Blueprint)
 
-`lnc-styles-gallery` is an internal LNC application modeled on `lnc-pose-gallery` (Shape A: single FastAPI container serving REST API, Streamable HTTP MCP server, and React + Vite + TanStack Router + shadcn/ui SPA frontend ported from `pose.lengoc.me`).
+`lnc-styles-gallery` is an internal LNC application modeled on the Internal App Blueprint (Shape A: single Rust Axum container serving the REST API, Streamable HTTP MCP server, OIDC PKCE S256 SSO + HKDF AES-256-GCM encrypted vault, and React + Vite + TanStack Router + shadcn/ui SPA frontend).
 
 - **Service Name**: `lnc-styles-gallery`
 - **Target Domain**: `styles.lengoc.me`
 - **Ports**: Container internal `8000` → Host port `8460`
-- **Stack**: Python 3.11 + FastAPI + Uvicorn + FastMCP / JSON-RPC 2.0 Streamable HTTP + React 19 + Vite 8 + TanStack Router + TanStack Query + shadcn/ui + Tailwind v4 (`ui/` → `ui/dist/`)
+- **Stack**: Rust + Axum + Tokio + Reqwest + Argon2/AES-256-GCM/HKDF (`server-rs/`) + React 19 + Vite 8 + TanStack Router + TanStack Query + shadcn/ui + Tailwind v4 (`ui/` → `ui/dist/`)
 
 ```
 lnc-styles-gallery/
-├── app/
-│   ├── __init__.py
-│   ├── config.py          # Env settings, NAS/local data path resolution, secret masking
-│   ├── store.py           # Thread-safe in-memory index, preview/shots lookup, full-text search, re-indexer
-│   ├── mcp_server.py      # /mcp Streamable HTTP endpoint + FastMCP tool registration (styles__*)
-│   └── main.py            # FastAPI routes (/api/*, /mcp, /admin, SPA static mount for ui/dist)
-├── ui/                    # React + Vite + TanStack Router + shadcn/ui SPA (ported from pose.lengoc.me)
+├── server-rs/             # Rust/Axum runtime binary
+│   └── src/
+│       ├── main.rs        # CLI entrypoint, healthcheck, signal handling, server boot
+│       ├── crypto.rs      # LNC_MASTER_KEY / LNC_MASTER_KEY_OLD HKDF AES-256-GCM envelopes & Argon2id
+│       ├── oidc.rs        # Keycloak PKCE S256 OIDC, v2 encrypted sessions, CSRF & rate limiters
+│       ├── config.rs      # Env settings, keys.json, vault.json, mcp_connectors.json, audit.jsonl
+│       ├── store.rs       # Thread-safe in-memory index, previews/shots, full-text search, re-indexer
+│       ├── mcp.rs         # /mcp Streamable HTTP JSON-RPC 2.0 endpoint (styles__* 8 tools)
+│       └── server.rs      # Axum router (/api/*, /api/auth/*, /api/admin/*, /mcp, /login.html, SPA)
+├── ui/                    # React + Vite + TanStack Router + shadcn/ui SPA
 │   ├── src/
-│   │   ├── api/           # Typed REST API client & TanStack Query options
+│   │   ├── api/           # Typed REST API client (X-CSRF-Token in-memory) & TanStack Query options
 │   │   ├── components/
-│   │   │   ├── common/    # PageHeader, StatCard, EmptyState, ImageViewer, ZoomViewport, StyleDetailDialog
-│   │   │   ├── layout/    # AppSidebar, AppHeader, nav
+│   │   │   ├── common/    # AuthGateCard, PageHeader, StatCard, EmptyState, ImageViewer, StyleDetailDialog
+│   │   │   ├── layout/    # AppSidebar (API Keys -> MCP Connectors -> Settings tail), AppHeader, nav
+│   │   │   ├── settings/  # SettingsView (Read-Only Authentication Posture + runtime diagnostics)
 │   │   │   ├── theme/     # ThemeProvider, ThemeToggle
-│   │   │   └── ui/        # shadcn/ui primitives
-│   │   ├── routes/        # __root, index (/), styles, collections, templates, platforms, components, licenses, admin
-│   │   ├── types/         # TypeScript interfaces for styles, shots, collections, templates, licenses
-│   │   ├── index.css      # Exact pose.lengoc.me dark/light theme tokens
-│   │   ├── main.tsx       # React + Router + QueryClient entry
-│   │   └── routeTree.gen.ts
-│   ├── index.html
+│   │   │   └── ui/        # shadcn/ui primitives (body-portaled concentric 10px/10px/6px droplists)
+│   │   ├── lib/           # clipboard.ts (HTTPS + HTTP LAN fallback), notifications, utils
+│   │   ├── routes/        # __root, index (/), styles, collections, templates, platforms, components, licenses, keys (/keys & /api-keys), mcp-connectors, settings (/settings & /admin)
+│   │   └── types/         # TypeScript interfaces
 │   ├── package.json
-│   ├── pnpm-lock.yaml
 │   └── vite.config.ts
-├── ui-vanilla-backup/     # Preserved v0.1.0 vanilla JS/CSS UI backup
 ├── infra/
-│   └── docker-compose.yml # Portainer / Docker Compose stack (8460:8000, read-only data mount)
-├── scripts/
-│   ├── smoke_test.py      # End-to-end smoke test for /api/*, previews/shots, SPA routes, and /mcp
-│   └── sync_data_from_nas.bat # Robocopy sync from NAS _agentsync/repos into ./data
-├── Dockerfile             # Multi-stage: node:20-alpine (pnpm build) -> python:3.11-slim runtime
-├── requirements.txt
-├── VERSION                # 0.3.0
+│   ├── docker-compose.yml # Portainer / Docker Compose stack (8460:8000, read-only data mount, /config)
+│   └── .env.example
+├── tests/e2e/
+│   └── e2e_scorecard.py   # Live runtime security, functional, MCP & resilience E2E scorecard
+├── Dockerfile             # Multi-stage: node + cargo chef/musl -> minimal runtime image
+├── VERSION                # 1.0.0.1
 └── README.md
 ```
 
@@ -105,7 +103,10 @@ Because the Refero harvest script (`harvest_images.py`) continues adding styles 
 - `GET /api/components/{component_id}/files/{path}` — Raw source file download (e.g. TSX)
 - `GET /api/licenses` — Structured license and source attribution manifest (4 corpora incl. update/re-harvest URLs)
 - `POST /api/admin/reindex` — Re-scan corpus directories on demand
-- `GET /api/admin/status` & `GET /api/admin/settings` — Corpus diagnostics and masked configuration
+- `GET /api/admin/status` & `GET /api/admin/settings` — Corpus diagnostics, authentication posture, recent `audit.jsonl`, and masked configuration
+- `GET/POST /api/auth/*` — OIDC PKCE `S256` flow, session metadata + `csrf_token`, break-glass login, local-only `POST /api/auth/logout` (`GET -> 405`), `sessions/revoke-all`
+- `GET/POST/PATCH/DELETE /api/admin/api-keys*` (aliases `/api/keys*`) & `POST .../copy` — Vault-backed API key lifecycle with rate-limited audited Copy
+- `GET/POST/PATCH/DELETE /api/admin/mcp-connectors*` (aliases `/api/mcp-connectors*`) & `POST .../copy|rotate|revoke|test` — Inbound `/mcp` connector credentials & live probe
 
 ---
 
@@ -125,10 +126,11 @@ Namespace: `styles__*`
 
 ## 5. Auth & House Conventions
 
-- Internal LNC network service (`styles.lengoc.me`).
-- Read endpoints (`/api/styles`, `/api/collections`, `/api/templates`, `/api/search`, `/api/licenses`) are accessible without auth on the internal network; if `STYLES_API_KEY` is configured, `/api/admin/*` and `/api/keys*` mutations verify `X-API-Key` or `Authorization: Bearer`.
-- **MCP Bearer gate (managed mode, live since v0.3.1)**: `STYLES_MCP_AUTH=1` (set in `infra/.env` on the deploy host — see `infra/.env.example`) enables `mcp_auth_middleware` requiring `Authorization: Bearer <token>` on `/mcp`. Tokens validate via `app/key_service.py` (`/config/keys.json`, writable mount `/home/Docker/lnc-styles-gallery-config`) or `STYLES_API_KEY`. The Business MCP Hub connects with its managed connector token, registered as the "Business MCP Hub Managed" key (same pattern as `lnc-pose-gallery`). Manage keys in the UI at `/keys` ("API Keys & MCP Access") or via `GET/POST/DELETE /api/keys*`, `/api/mcp/info` reports endpoint/tools/auth state.
-- All secret/key values in `/api/admin/settings` are masked (`***`).
+- Internal LNC network service (`styles.lengoc.me`, `has_ai=false`, `exposes_mcp=true`, `consumes_mcp=false`).
+- Public catalog read endpoints (`/api/styles`, `/api/collections`, `/api/templates`, `/api/components`, `/api/search`, `/api/licenses`, `/health`, `/api/health`) remain accessible on the internal network; admin & key/connector endpoints require an OIDC PKCE `S256` session cookie (`v2` AES-256-GCM sealed), break-glass `MANAGEMENT_KEY` session, or `STYLES_API_KEY` header.
+- State-changing session endpoints enforce strict `Origin`/`Sec-Fetch-Site` validation (ignoring `X-Forwarded-Host`) and `X-CSRF-Token`. `GET /api/auth/logout` returns `405 Method Not Allowed`; logout uses local-only `POST /api/auth/logout`. Query-string tokens (`?token=`, `?key=`, `?api_key=`) return `400 Bad Request`.
+- **MCP Bearer & Inbound Connectors (`/mcp`, `/keys`, `/mcp-connectors`)**: `STYLES_MCP_AUTH=1` requires `Authorization: Bearer <token>` or `X-API-Key: <token>` on `/mcp`. Keys and inbound connector credentials store salted SHA-256 hashes in `/config/keys.json` & `/config/mcp_connectors.json` plus HKDF AES-256-GCM envelopes in `/config/vault.json` (with automatic `LNC_MASTER_KEY_OLD` re-wrap on startup). Audited `POST .../copy` (`15/5m/IP` limit, `Cache-Control: no-store`, `audit.jsonl`) supports copying vault-backed keys (`410 Gone` for legacy hash-only keys).
+- Settings (`/settings`, alias `/admin`) displays a Read-Only **Authentication Posture** card and masked configuration (`***`).
 
 ---
 

@@ -1,6 +1,6 @@
 [package]
 name = "lnc-styles-gallery"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "LNC Style Library — Rust single-binary backend, MCP server & SPA host"
 license = "UNLICENSED"

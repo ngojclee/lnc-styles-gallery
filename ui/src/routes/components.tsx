@@ -28,6 +28,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { copyText } from "@/lib/clipboard"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import type { ComponentItem } from "@/types/styles"
@@ -120,12 +121,12 @@ function ComponentsPage() {
       toast.error("No source available to copy")
       return
     }
-    try {
-      await navigator.clipboard.writeText(text)
+    const ok = await copyText(text)
+    if (ok) {
       setCopied(true)
       toast.success(`Copied source for ${selected?.id}`)
       setTimeout(() => setCopied(false), 2000)
-    } catch {
+    } else {
       toast.error("Clipboard copy failed")
     }
   }

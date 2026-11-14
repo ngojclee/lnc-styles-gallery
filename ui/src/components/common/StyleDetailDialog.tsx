@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
+import { copyText } from "@/lib/clipboard"
 import { cn } from "@/lib/utils"
 
 interface StyleDetailDialogProps {
@@ -263,12 +264,12 @@ export function StyleDetailDialog({ styleId, open, onOpenChange }: StyleDetailDi
       toast.error("No DESIGN.md content to copy")
       return
     }
-    try {
-      await navigator.clipboard.writeText(style.design_md)
+    const ok = await copyText(style.design_md)
+    if (ok) {
       setCopied(true)
       toast.success(`Copied DESIGN.md for "${style.title}"`)
       setTimeout(() => setCopied(false), 2000)
-    } catch {
+    } else {
       toast.error("Clipboard copy failed")
     }
   }

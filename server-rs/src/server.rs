@@ -11,13 +11,15 @@ use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, Stat
 use axum::http::{header, Extensions, HeaderMap, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use url::Url;
 
-use crate::config::{now_secs, AppSettings, RuntimeStore};
+use crate::config::{
+    now_secs, AppSettings, ConnectorMutationError, CopySecretOutcome, RuntimeStore,
+};
 use crate::mcp;
 use crate::oidc::{self, LoginLimiter, OidcClient, SessionClaims};
 use crate::store::{self, StyleLibraryStore};
@@ -71,22 +73,83 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         // Licenses
         .route("/api/licenses", get(api_licenses))
-        // API Keys (Zero-F12-Leak + 410 Gone on /copy) + /api/admin/keys aliases
+        // API Keys (Zero-F12-Leak GET + HKDF AES-256-GCM Audited POST /copy)
         .route("/api/keys", get(api_list_keys).post(api_create_key))
-        .route("/api/keys/{key_id}", delete(api_delete_key))
+        .route(
+            "/api/keys/{key_id}",
+            patch(api_update_key).delete(api_delete_key),
+        )
         .route("/api/keys/{key_id}/revoke", post(api_revoke_key))
         .route("/api/keys/{key_id}/rotate", post(api_rotate_key))
-        .route(
-            "/api/keys/{key_id}/copy",
-            get(api_copy_key_gone).post(api_copy_key_gone),
-        )
+        .route("/api/keys/{key_id}/copy", post(api_copy_key))
         .route("/api/admin/keys", get(api_list_keys).post(api_create_key))
-        .route("/api/admin/keys/{key_id}", delete(api_delete_key))
+        .route(
+            "/api/admin/keys/{key_id}",
+            patch(api_update_key).delete(api_delete_key),
+        )
         .route("/api/admin/keys/{key_id}/revoke", post(api_revoke_key))
         .route("/api/admin/keys/{key_id}/rotate", post(api_rotate_key))
+        .route("/api/admin/keys/{key_id}/copy", post(api_copy_key))
+        .route("/api/admin/api-keys", get(api_list_keys).post(api_create_key))
         .route(
-            "/api/admin/keys/{key_id}/copy",
-            get(api_copy_key_gone).post(api_copy_key_gone),
+            "/api/admin/api-keys/{key_id}",
+            patch(api_update_key).delete(api_delete_key),
+        )
+        .route("/api/admin/api-keys/{key_id}/revoke", post(api_revoke_key))
+        .route("/api/admin/api-keys/{key_id}/rotate", post(api_rotate_key))
+        .route("/api/admin/api-keys/{key_id}/copy", post(api_copy_key))
+        // MCP Connectors (Inbound /mcp governance: Copy · Rotate · Revoke · Remove + Test)
+        .route(
+            "/api/admin/mcp-connectors",
+            get(api_list_connectors).post(api_create_connector),
+        )
+        .route(
+            "/api/admin/mcp-connectors/{connector_id}",
+            patch(api_update_connector)
+                .put(api_update_connector)
+                .delete(api_delete_connector),
+        )
+        .route(
+            "/api/admin/mcp-connectors/{connector_id}/copy",
+            post(api_copy_connector),
+        )
+        .route(
+            "/api/admin/mcp-connectors/{connector_id}/rotate",
+            post(api_rotate_connector),
+        )
+        .route(
+            "/api/admin/mcp-connectors/{connector_id}/revoke",
+            post(api_revoke_connector),
+        )
+        .route(
+            "/api/admin/mcp-connectors/{connector_id}/test",
+            post(api_test_connector),
+        )
+        .route(
+            "/api/mcp-connectors",
+            get(api_list_connectors).post(api_create_connector),
+        )
+        .route(
+            "/api/mcp-connectors/{connector_id}",
+            patch(api_update_connector)
+                .put(api_update_connector)
+                .delete(api_delete_connector),
+        )
+        .route(
+            "/api/mcp-connectors/{connector_id}/copy",
+            post(api_copy_connector),
+        )
+        .route(
+            "/api/mcp-connectors/{connector_id}/rotate",
+            post(api_rotate_connector),
+        )
+        .route(
+            "/api/mcp-connectors/{connector_id}/revoke",
+            post(api_revoke_connector),
+        )
+        .route(
+            "/api/mcp-connectors/{connector_id}/test",
+            post(api_test_connector),
         )
         // Admin
         .route(
@@ -110,7 +173,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/auth/revoke-all", post(api_auth_revoke_all))
         .route("/api/auth/oidc/login", get(api_oidc_login))
         .route("/api/auth/oidc/callback", get(api_oidc_callback))
-        // SPA entry routes
+        // SPA entry routes (Note: `/mcp` is reserved for Streamable HTTP MCP)
         .route("/", get(serve_public_spa))
         .route("/styles", get(serve_public_spa))
         .route("/collections", get(serve_public_spa))
@@ -119,6 +182,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/platforms", get(serve_public_spa))
         .route("/licenses", get(serve_public_spa))
         .route("/keys", get(serve_protected_keys_spa))
+        .route("/api-keys", get(serve_protected_api_keys_spa))
+        .route("/mcp-connectors", get(serve_protected_mcp_connectors_spa))
+        .route("/settings", get(serve_protected_settings_spa))
         .route("/admin", get(serve_protected_admin_spa))
         .route("/{*path}", get(serve_spa_fallback))
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
@@ -157,6 +223,29 @@ async fn security_headers_middleware(
         return resp;
     }
 
+    // Block `?token=`, `?key=`, `?api_key=` secret-bearing query params globally (HTTP 400)
+    if let Some(q) = req.uri().query() {
+        let has_query_secret = url::form_urlencoded::parse(q.as_bytes()).any(|(k, _)| {
+            matches!(
+                k.to_ascii_lowercase().as_str(),
+                "token" | "key" | "api_key"
+            )
+        });
+        if has_query_secret {
+            let mut resp = (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "ok": false,
+                    "error": "query_secret_forbidden",
+                    "detail": "Credentials must not be passed in URL query parameters (?token, ?key, ?api_key); use Authorization: Bearer or X-API-Key headers."
+                })),
+            )
+                .into_response();
+            apply_common_security_headers(&mut resp, &path);
+            return resp;
+        }
+    }
+
     // Allowed-hosts guard when ALLOWED_HOSTS != "*"
     if state.settings.allowed_hosts != "*" && !state.settings.allowed_hosts.is_empty() {
         if let Some(host_hdr) = req
@@ -192,13 +281,33 @@ async fn security_headers_middleware(
     resp
 }
 
+const LOGIN_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'";
+
+fn is_no_store_path(path: &str) -> bool {
+    path == "/login.html"
+        || path == "/login.js"
+        || path.starts_with("/api/auth/")
+        || path == "/api/keys"
+        || path.starts_with("/api/keys/")
+        || path.starts_with("/api/admin/")
+        || path == "/api/mcp-connectors"
+        || path.starts_with("/api/mcp-connectors/")
+}
+
 fn apply_common_security_headers(resp: &mut Response, path: &str) {
     let h = resp.headers_mut();
     h.insert(
         "X-Content-Type-Options",
         HeaderValue::from_static("nosniff"),
     );
-    h.insert("X-Frame-Options", HeaderValue::from_static("SAMEORIGIN"));
+    h.insert(
+        "X-Frame-Options",
+        HeaderValue::from_static(if path == "/login.html" {
+            "DENY"
+        } else {
+            "SAMEORIGIN"
+        }),
+    );
     h.insert(
         "Referrer-Policy",
         HeaderValue::from_static("strict-origin-when-cross-origin"),
@@ -211,10 +320,23 @@ fn apply_common_security_headers(resp: &mut Response, path: &str) {
         "Cross-Origin-Opener-Policy",
         HeaderValue::from_static("same-origin"),
     );
+    if is_no_store_path(path) {
+        h.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, private, max-age=0"),
+        );
+        h.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    }
     if !h.contains_key(header::CONTENT_SECURITY_POLICY) {
         let is_demo_html = (path.starts_with("/api/templates/") && path.ends_with("/html"))
             || (path.starts_with("/api/components/") && path.ends_with("/html"));
-        let csp = if is_demo_html { DEMO_CSP } else { APP_CSP };
+        let csp = if path == "/login.html" {
+            LOGIN_CSP
+        } else if is_demo_html {
+            DEMO_CSP
+        } else {
+            APP_CSP
+        };
         if let Ok(v) = HeaderValue::from_str(csp) {
             h.insert(header::CONTENT_SECURITY_POLICY, v);
         }
@@ -262,12 +384,22 @@ fn resolve_session(state: &AppState, headers: &HeaderMap) -> Option<(SessionClai
     let raw_cookie = oidc::cookie_value(headers, oidc::SESSION_COOKIE)?;
     let now = now_secs();
     let epoch = state.runtime.session_epoch();
-    let claims = oidc::verify_session(state.runtime.master(), &raw_cookie, epoch, now)?;
+    let claims = oidc::verify_session_with_ttl(
+        state.runtime.master(),
+        &raw_cookie,
+        epoch,
+        now,
+        state.settings.session_ttl,
+    )?;
     let renewed_set_cookie = if oidc::needs_renewal(&claims, now) {
         let updated = oidc::renew(claims.clone(), now);
         let signed = oidc::sign_session(state.runtime.master(), &updated);
         let secure = oidc::request_is_secure(headers, state.settings.cookie_secure);
-        Some(oidc::session_cookie(&signed, secure))
+        Some(oidc::session_cookie_with_ttl(
+            &signed,
+            secure,
+            state.settings.session_ttl.max_ttl_secs,
+        ))
     } else {
         None
     };
@@ -302,9 +434,17 @@ fn extract_host_only(host_port: &str) -> String {
 }
 
 #[allow(clippy::result_large_err)]
-fn check_csrf_origin(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
-    if let Some(sfs) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
-        if sfs.trim().eq_ignore_ascii_case("cross-site") {
+fn check_csrf_origin(
+    state: &AppState,
+    headers: &HeaderMap,
+    require_origin_or_same_site: bool,
+) -> Result<(), Response> {
+    let sfs_opt = headers
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_ascii_lowercase());
+    if let Some(ref sfs) = sfs_opt {
+        if sfs != "same-origin" && sfs != "same-site" && sfs != "none" {
             return Err(csrf_forbidden());
         }
     }
@@ -315,6 +455,9 @@ fn check_csrf_origin(state: &AppState, headers: &HeaderMap) -> Result<(), Respon
         .or_else(|| headers.get(header::REFERER).and_then(|v| v.to_str().ok()));
 
     let Some(raw_origin) = origin_or_ref.map(str::trim).filter(|s| !s.is_empty()) else {
+        if require_origin_or_same_site && sfs_opt.as_deref() != Some("same-origin") {
+            return Err(csrf_forbidden());
+        }
         return Ok(());
     };
     if raw_origin.eq_ignore_ascii_case("null") {
@@ -327,15 +470,10 @@ fn check_csrf_origin(state: &AppState, headers: &HeaderMap) -> Result<(), Respon
         return Err(csrf_forbidden());
     };
 
+    // Ignore X-Forwarded-Host: only trust real Host header or configured effective_public_url.
     let mut allowed_hosts = Vec::new();
     if let Some(h) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) {
         allowed_hosts.push(extract_host_only(h));
-    } else if let Some(xfh) = headers
-        .get("x-forwarded-host")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-    {
-        allowed_hosts.push(extract_host_only(xfh));
     }
     if let Ok(pub_u) = Url::parse(&state.runtime.effective_public_url(&state.settings.public_url)) {
         if let Some(ph) = pub_u.host_str() {
@@ -347,6 +485,47 @@ fn check_csrf_origin(state: &AppState, headers: &HeaderMap) -> Result<(), Respon
         Ok(())
     } else {
         Err(csrf_forbidden())
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn verify_session_csrf_header(
+    state: &AppState,
+    claims: &SessionClaims,
+    headers: &HeaderMap,
+    required: bool,
+) -> Result<(), Response> {
+    let provided = headers
+        .get("x-csrf-token")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match provided {
+        Some(tok) => {
+            if oidc::verify_session_csrf_token(state.runtime.master(), claims, tok) {
+                Ok(())
+            } else {
+                Err((
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "ok": false,
+                        "error": "csrf_token_invalid",
+                        "detail": "Invalid X-CSRF-Token header"
+                    })),
+                )
+                    .into_response())
+            }
+        }
+        None if required => Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "ok": false,
+                "error": "csrf_token_missing",
+                "detail": "Missing X-CSRF-Token header"
+            })),
+        )
+            .into_response()),
+        None => Ok(()),
     }
 }
 
@@ -385,7 +564,8 @@ fn require_mutation_auth(
         Some(AuthPrincipal::AdminHeader) => Ok(AuthPrincipal::AdminHeader),
         Some(AuthPrincipal::Session(c, renew_cookie)) => {
             if is_state_changing {
-                check_csrf_origin(state, headers)?;
+                check_csrf_origin(state, headers, false)?;
+                verify_session_csrf_header(state, &c, headers, false)?;
             }
             Ok(AuthPrincipal::Session(c, renew_cookie))
         }
@@ -393,7 +573,7 @@ fn require_mutation_auth(
         None => {
             if !auth_is_active(state) && state.settings.dev_open_admin {
                 if is_state_changing {
-                    check_csrf_origin(state, headers)?;
+                    check_csrf_origin(state, headers, false)?;
                 }
                 Ok(AuthPrincipal::DevOpen)
             } else {
@@ -859,12 +1039,38 @@ async fn api_mcp_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "tools_count": tools.len(),
         "tools": tools,
         "keys_count": state.runtime.keys_count(),
+        "connectors_count": state.runtime.connectors_count(),
     }))
 }
 
 // ---------------------------------------------------------------------------
-// Hardened API Keys (`/api/keys*`, Zero-F12-Leak, `410 Gone` `/copy`)
+// Hardened API Keys (`/api/keys*`, `/api/admin/api-keys*`, Audited Vault Copy)
 // ---------------------------------------------------------------------------
+
+fn principal_actor(principal: &AuthPrincipal) -> String {
+    match principal {
+        AuthPrincipal::Session(c, _) => format!("{}:{}", c.mode, c.sub),
+        AuthPrincipal::AdminHeader => "admin_header".to_string(),
+        AuthPrincipal::DevOpen => "dev_open".to_string(),
+    }
+}
+
+fn rate_limited_response(retry_secs: u64, msg: &str) -> Response {
+    let mut resp = (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({
+            "ok": false,
+            "error": "rate_limited",
+            "detail": format!("{msg} Retry after {retry_secs}s."),
+            "retry_after": retry_secs,
+        })),
+    )
+        .into_response();
+    if let Ok(hv) = HeaderValue::from_str(&retry_secs.to_string()) {
+        resp.headers_mut().insert(header::RETRY_AFTER, hv);
+    }
+    resp
+}
 
 async fn api_list_keys(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let renew = match require_read_auth_when_active(&state, &headers) {
@@ -886,6 +1092,8 @@ struct CreateKeyPayload {
     label: String,
     #[serde(default)]
     custom_secret: Option<String>,
+    #[serde(default)]
+    scopes: Option<Vec<String>>,
 }
 
 async fn api_create_key(
@@ -905,10 +1113,11 @@ async fn api_create_key(
         )
             .into_response();
     }
-    match state
-        .runtime
-        .create_key(label, payload.custom_secret.as_deref())
-    {
+    match state.runtime.create_key_with_scopes(
+        label,
+        payload.custom_secret.as_deref(),
+        payload.scopes,
+    ) {
         Ok((raw_once, item)) => {
             let renew = match principal {
                 AuthPrincipal::Session(_, r) => r,
@@ -922,6 +1131,116 @@ async fn api_create_key(
             .into_response();
             attach_optional_cookie(resp, renew)
         }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "detail": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct UpdateKeyPayload {
+    label: Option<String>,
+    scopes: Option<Vec<String>>,
+}
+
+async fn api_update_key(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(key_id): AxumPath<String>,
+    Json(payload): Json<UpdateKeyPayload>,
+) -> Response {
+    let principal = match require_mutation_auth(&state, &headers, true) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    if let Some(ref lbl) = payload.label {
+        if lbl.trim().is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "detail": "Key label cannot be empty" })),
+            )
+                .into_response();
+        }
+    }
+    match state
+        .runtime
+        .update_key(&key_id, payload.label.as_deref(), payload.scopes)
+    {
+        Ok(Some(item)) => {
+            let renew = match principal {
+                AuthPrincipal::Session(_, r) => r,
+                _ => None,
+            };
+            attach_optional_cookie(
+                Json(json!({ "ok": true, "item": item })).into_response(),
+                renew,
+            )
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "detail": "Key not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "detail": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_copy_key(
+    State(state): State<Arc<AppState>>,
+    extensions: Extensions,
+    headers: HeaderMap,
+    AxumPath(key_id): AxumPath<String>,
+) -> Response {
+    let principal = match require_mutation_auth(&state, &headers, true) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let remote_addr = extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(a)| *a);
+    let ip = client_ip(&headers, remote_addr);
+    if let Err(retry_secs) = state.runtime.check_copy_rate_limit(&ip) {
+        return rate_limited_response(retry_secs, "Too many secret copy requests.");
+    }
+    match state.runtime.copy_key(&key_id) {
+        Ok(CopySecretOutcome::Secret(raw_secret)) => {
+            let actor = principal_actor(&principal);
+            state
+                .runtime
+                .record_audit_event(&actor, "secret.copy", "api_key", &key_id, &ip);
+            let renew = match principal {
+                AuthPrincipal::Session(_, r) => r,
+                _ => None,
+            };
+            let resp = Json(json!({
+                "ok": true,
+                "id": key_id,
+                "secret": raw_secret.as_str(),
+                "copied_field": "token",
+            }))
+            .into_response();
+            attach_optional_cookie(resp, renew)
+        }
+        Ok(CopySecretOutcome::LegacyHashOnly) => (
+            StatusCode::GONE,
+            Json(json!({
+                "ok": false,
+                "error": "legacy_hash_only",
+                "detail": "Legacy API key has no encrypted vault envelope. Rotate the key to enable Copy."
+            })),
+        )
+            .into_response(),
+        Ok(CopySecretOutcome::NotFound) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "detail": "Key not found" })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "detail": e.to_string() })),
@@ -1052,24 +1371,423 @@ async fn api_delete_key(
     }
 }
 
-async fn api_copy_key_gone(
-    State(state): State<Arc<AppState>>,
-    method: Method,
-    headers: HeaderMap,
-    AxumPath(_key_id): AxumPath<String>,
-) -> Response {
-    if let Err(resp) = require_mutation_auth(&state, &headers, method != Method::GET) {
-        return resp;
-    }
+// ---------------------------------------------------------------------------
+// MCP Connectors Endpoints (`/api/admin/mcp-connectors*`, `/api/mcp-connectors*`)
+// ---------------------------------------------------------------------------
+
+fn mcp_endpoint_url(state: &AppState) -> String {
+    let pub_url = state
+        .runtime
+        .effective_public_url(&state.settings.public_url);
+    format!("{}/mcp", pub_url.trim_end_matches('/'))
+}
+
+fn env_managed_conflict() -> Response {
     (
-        StatusCode::GONE,
+        StatusCode::CONFLICT,
         Json(json!({
             "ok": false,
-            "error": "secret_reveal_disabled",
-            "detail": "Plaintext API key retrieval is permanently disabled (410 Gone). Rotate the key to issue a new one-time token."
+            "error": "env_managed_connector",
+            "detail": "Managed by container environment variable — clear CONNECTOR_BEARER to mutate in UI."
         })),
     )
         .into_response()
+}
+
+async fn api_list_connectors(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let renew = match require_read_auth_when_active(&state, &headers) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let endpoint = mcp_endpoint_url(&state);
+    let tools: Vec<Value> = mcp::mcp_tools_schema()
+        .into_iter()
+        .map(|t| {
+            json!({
+                "name": t["name"],
+                "description": t["description"],
+            })
+        })
+        .collect();
+    let resp = Json(json!({
+        "ok": true,
+        "endpoint": endpoint,
+        "namespace": "styles__*",
+        "transport": "Streamable HTTP JSON-RPC 2.0",
+        "auth_required": state.settings.mcp_auth_required,
+        "audience": state.settings.connector_audience,
+        "max_scopes": state.settings.connector_max_scopes,
+        "delegation_configured": state.settings.connector_delegation_configured,
+        "tools_count": tools.len(),
+        "tools": tools,
+        "connectors": state.runtime.list_connectors(&endpoint),
+    }))
+    .into_response();
+    attach_optional_cookie(resp, renew)
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateConnectorPayload {
+    name: String,
+    #[serde(default)]
+    audience: Option<String>,
+    #[serde(default)]
+    scopes: Option<Vec<String>>,
+    #[serde(default)]
+    custom_secret: Option<String>,
+}
+
+async fn api_create_connector(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateConnectorPayload>,
+) -> Response {
+    let principal = match require_mutation_auth(&state, &headers, true) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let name = payload.name.trim();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "detail": "Connector name cannot be empty" })),
+        )
+            .into_response();
+    }
+    let endpoint = mcp_endpoint_url(&state);
+    let audience = payload
+        .audience
+        .as_deref()
+        .unwrap_or(&state.settings.connector_audience);
+    let scopes = payload
+        .scopes
+        .unwrap_or_else(|| state.settings.connector_max_scopes.clone());
+    match state.runtime.create_connector(
+        name,
+        audience,
+        scopes,
+        payload.custom_secret.as_deref(),
+        &endpoint,
+    ) {
+        Ok((raw_once, item)) => {
+            let renew = match principal {
+                AuthPrincipal::Session(_, r) => r,
+                _ => None,
+            };
+            attach_optional_cookie(
+                Json(json!({
+                    "ok": true,
+                    "secret": raw_once.as_str(),
+                    "item": item,
+                }))
+                .into_response(),
+                renew,
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "detail": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct UpdateConnectorPayload {
+    name: Option<String>,
+    audience: Option<String>,
+    scopes: Option<Vec<String>>,
+    custom_secret: Option<String>,
+    secret: Option<String>,
+}
+
+async fn api_update_connector(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(connector_id): AxumPath<String>,
+    Json(payload): Json<UpdateConnectorPayload>,
+) -> Response {
+    let principal = match require_mutation_auth(&state, &headers, true) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    if let Some(ref n) = payload.name {
+        if n.trim().is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "detail": "Connector name cannot be empty" })),
+            )
+                .into_response();
+        }
+    }
+    let endpoint = mcp_endpoint_url(&state);
+    let sec = payload.custom_secret.or(payload.secret);
+    match state.runtime.update_connector(
+        &connector_id,
+        payload.name.as_deref(),
+        payload.audience.as_deref(),
+        payload.scopes,
+        sec.as_deref(),
+        &endpoint,
+    ) {
+        Ok(Ok(item)) => {
+            let renew = match principal {
+                AuthPrincipal::Session(_, r) => r,
+                _ => None,
+            };
+            attach_optional_cookie(
+                Json(json!({ "ok": true, "item": item })).into_response(),
+                renew,
+            )
+        }
+        Ok(Err(ConnectorMutationError::NotFound)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "detail": "Connector not found" })),
+        )
+            .into_response(),
+        Ok(Err(ConnectorMutationError::EnvManaged)) => env_managed_conflict(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "detail": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_copy_connector(
+    State(state): State<Arc<AppState>>,
+    extensions: Extensions,
+    headers: HeaderMap,
+    AxumPath(connector_id): AxumPath<String>,
+) -> Response {
+    let principal = match require_mutation_auth(&state, &headers, true) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let remote_addr = extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(a)| *a);
+    let ip = client_ip(&headers, remote_addr);
+    if let Err(retry_secs) = state.runtime.check_copy_rate_limit(&ip) {
+        return rate_limited_response(retry_secs, "Too many secret copy requests.");
+    }
+    let endpoint = mcp_endpoint_url(&state);
+    match state.runtime.copy_connector(&connector_id) {
+        Ok(CopySecretOutcome::Secret(raw_secret)) => {
+            let actor = principal_actor(&principal);
+            state.runtime.record_audit_event(
+                &actor,
+                "secret.copy",
+                "mcp_connector",
+                &connector_id,
+                &ip,
+            );
+            let renew = match principal {
+                AuthPrincipal::Session(_, r) => r,
+                _ => None,
+            };
+            attach_optional_cookie(
+                Json(json!({
+                    "ok": true,
+                    "id": connector_id,
+                    "secret": raw_secret.as_str(),
+                    "copied_field": "token",
+                    "endpoint_url": endpoint,
+                }))
+                .into_response(),
+                renew,
+            )
+        }
+        Ok(CopySecretOutcome::LegacyHashOnly) => (
+            StatusCode::GONE,
+            Json(json!({
+                "ok": false,
+                "error": "legacy_hash_only",
+                "detail": "Connector has no encrypted vault envelope. Rotate the connector to enable Copy."
+            })),
+        )
+            .into_response(),
+        Ok(CopySecretOutcome::NotFound) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "detail": "Connector not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "detail": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_rotate_connector(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(connector_id): AxumPath<String>,
+    payload: Option<Json<RotateKeyPayload>>,
+) -> Response {
+    let principal = match require_mutation_auth(&state, &headers, true) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let custom = payload.and_then(|Json(p)| p.custom_secret);
+    let endpoint = mcp_endpoint_url(&state);
+    match state
+        .runtime
+        .rotate_connector(&connector_id, custom.as_deref(), &endpoint)
+    {
+        Ok(Ok((raw_once, item))) => {
+            let renew = match principal {
+                AuthPrincipal::Session(_, r) => r,
+                _ => None,
+            };
+            attach_optional_cookie(
+                Json(json!({
+                    "ok": true,
+                    "secret": raw_once.as_str(),
+                    "item": item,
+                    "message": "Connector token rotated successfully",
+                }))
+                .into_response(),
+                renew,
+            )
+        }
+        Ok(Err(ConnectorMutationError::NotFound)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "detail": "Connector not found" })),
+        )
+            .into_response(),
+        Ok(Err(ConnectorMutationError::EnvManaged)) => env_managed_conflict(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "detail": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_revoke_connector(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(connector_id): AxumPath<String>,
+    payload: Option<Json<RevokeKeyPayload>>,
+) -> Response {
+    let principal = match require_mutation_auth(&state, &headers, true) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let revoke_val = payload.and_then(|Json(p)| p.revoke).unwrap_or(true);
+    let endpoint = mcp_endpoint_url(&state);
+    match state
+        .runtime
+        .revoke_connector(&connector_id, revoke_val, &endpoint)
+    {
+        Ok(Ok(item)) => {
+            let renew = match principal {
+                AuthPrincipal::Session(_, r) => r,
+                _ => None,
+            };
+            attach_optional_cookie(
+                Json(json!({
+                    "ok": true,
+                    "message": if revoke_val { "Connector revoked" } else { "Connector reactivated" },
+                    "item": item,
+                }))
+                .into_response(),
+                renew,
+            )
+        }
+        Ok(Err(ConnectorMutationError::NotFound)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "detail": "Connector not found" })),
+        )
+            .into_response(),
+        Ok(Err(ConnectorMutationError::EnvManaged)) => env_managed_conflict(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "detail": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_delete_connector(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(connector_id): AxumPath<String>,
+) -> Response {
+    let principal = match require_mutation_auth(&state, &headers, true) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match state.runtime.delete_connector(&connector_id) {
+        Ok(Ok(())) => {
+            let renew = match principal {
+                AuthPrincipal::Session(_, r) => r,
+                _ => None,
+            };
+            attach_optional_cookie(
+                Json(json!({ "ok": true, "message": "Connector removed" })).into_response(),
+                renew,
+            )
+        }
+        Ok(Err(ConnectorMutationError::NotFound)) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "detail": "Connector not found" })),
+        )
+            .into_response(),
+        Ok(Err(ConnectorMutationError::EnvManaged)) => env_managed_conflict(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "detail": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_test_connector(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(connector_id): AxumPath<String>,
+) -> Response {
+    let principal = match require_mutation_auth(&state, &headers, true) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let t0 = std::time::Instant::now();
+    let Some((enabled, scopes, audience)) = state.runtime.connector_status(&connector_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "detail": "Connector not found" })),
+        )
+            .into_response();
+    };
+    let endpoint = mcp_endpoint_url(&state);
+    let tools_count = mcp::mcp_tools_schema().len();
+    let latency_ms = t0.elapsed().as_millis() as u64;
+    let renew = match principal {
+        AuthPrincipal::Session(_, r) => r,
+        _ => None,
+    };
+    attach_optional_cookie(
+        Json(json!({
+            "ok": enabled,
+            "id": connector_id,
+            "status": if enabled { "healthy" } else { "revoked" },
+            "endpoint": endpoint,
+            "tools_count": tools_count,
+            "latency_ms": latency_ms,
+            "audience": audience,
+            "scopes": scopes,
+            "detail": if enabled {
+                format!("Streamable HTTP /mcp healthy ({tools_count} tools ready)")
+            } else {
+                "Connector is revoked; bearer requests are rejected with 401".to_string()
+            },
+        }))
+        .into_response(),
+        renew,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,6 +1874,7 @@ fn build_admin_settings_payload(state: &AppState) -> Value {
         .runtime
         .masked_settings_dict(&state.settings, state.oidc.enabled());
     let st = state.corpus.status();
+    let oidc_cfg = state.oidc.settings();
     json!({
         "settings": masked,
         "corpus": st,
@@ -1175,7 +1894,25 @@ fn build_admin_settings_payload(state: &AppState) -> Value {
         "api_key_configured": masked["api_key_configured"],
         "api_key_masked": masked["api_key_masked"],
         "oidc_enabled": state.oidc.enabled(),
+        "oidc_issuer": oidc_cfg.issuer,
+        "oidc_client_id": oidc_cfg.client_id,
+        "oidc_redirect_uri": oidc_cfg.redirect_uri,
+        "oidc_scopes": oidc_cfg.scopes,
+        "oidc_allowed_users": oidc_cfg.allowed_users,
+        "oidc_allowed_groups": oidc_cfg.allowed_groups,
+        "oidc_client_secret_configured": !oidc_cfg.client_secret.is_empty(),
+        "mcp_auth_required": state.settings.mcp_auth_required,
         "session_epoch": state.runtime.session_epoch(),
+        "session_idle_ttl_seconds": state.settings.session_ttl.idle_ttl_secs,
+        "session_max_ttl_seconds": state.settings.session_ttl.max_ttl_secs,
+        "cookie_secure": state.settings.cookie_secure,
+        "master_key_configured": state.settings.master_key_configured,
+        "master_key_old_configured": state.settings.master_key_old_configured,
+        "rewrapped_from_old_key": state.runtime.rewrapped_from_old_key(),
+        "connector_audience": state.settings.connector_audience,
+        "connector_max_scopes": state.settings.connector_max_scopes,
+        "connector_delegation_configured": state.settings.connector_delegation_configured,
+        "recent_audit_events": state.runtime.recent_audit_events(6),
         "cors_origins": state.settings.allowed_hosts,
     })
 }
@@ -1191,7 +1928,8 @@ async fn api_auth_session(State(state): State<Arc<AppState>>, headers: HeaderMap
     let epoch = state.runtime.session_epoch();
 
     if let Some((claims, renew_cookie)) = resolve_session(&state, &headers) {
-        let (exp_ms, idle_ms) = oidc::expires_info(&claims);
+        let (exp_ms, idle_ms) = oidc::expires_info_with_ttl(&claims, state.settings.session_ttl);
+        let csrf_token = oidc::derive_session_csrf_token(state.runtime.master(), &claims);
         let resp = Json(json!({
             "ok": true,
             "authenticated": true,
@@ -1204,6 +1942,7 @@ async fn api_auth_session(State(state): State<Arc<AppState>>, headers: HeaderMap
             "session_epoch": epoch,
             "expires_at": exp_ms,
             "idle_expires_at": idle_ms,
+            "csrf_token": csrf_token,
         }))
         .into_response();
         return attach_optional_cookie(resp, renew_cookie);
@@ -1257,7 +1996,7 @@ async fn api_auth_login(
     headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Response {
-    if let Err(resp) = check_csrf_origin(&state, &headers) {
+    if let Err(resp) = check_csrf_origin(&state, &headers, false) {
         return resp;
     }
 
@@ -1310,7 +2049,12 @@ async fn api_auth_login(
     );
     let signed = oidc::sign_session(state.runtime.master(), &claims);
     let secure = oidc::request_is_secure(&headers, state.settings.cookie_secure);
-    let set_cookie = oidc::session_cookie(&signed, secure);
+    let set_cookie = oidc::session_cookie_with_ttl(
+        &signed,
+        secure,
+        state.settings.session_ttl.max_ttl_secs,
+    );
+    let csrf_token = oidc::derive_session_csrf_token(state.runtime.master(), &claims);
 
     attach_optional_cookie(
         Json(json!({
@@ -1318,6 +2062,7 @@ async fn api_auth_login(
             "authenticated": true,
             "mode": "mgmt_key",
             "session_epoch": epoch,
+            "csrf_token": csrf_token,
         }))
         .into_response(),
         Some(set_cookie),
@@ -1325,8 +2070,15 @@ async fn api_auth_login(
 }
 
 async fn api_auth_logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(resp) = check_csrf_origin(&state, &headers) {
+    // Strict local-only logout: require same-origin / Origin / Sec-Fetch-Site (ignoring X-Forwarded-Host)
+    if let Err(resp) = check_csrf_origin(&state, &headers, true) {
         return resp;
+    }
+    // Enforce X-CSRF-Token strictly whenever a session cookie is active (or header present)
+    if let Some((claims, _)) = resolve_session(&state, &headers) {
+        if let Err(resp) = verify_session_csrf_header(&state, &claims, &headers, true) {
+            return resp;
+        }
     }
     let secure = oidc::request_is_secure(&headers, state.settings.cookie_secure);
     let clear = oidc::clear_cookie(oidc::SESSION_COOKIE, secure);
@@ -1386,7 +2138,11 @@ async fn api_oidc_login(
             let sc = oidc::oidc_tx_cookie(&tx_cookie_val, secure);
             attach_optional_cookie(redirect_302(&auth_url), Some(sc))
         }
-        Err(err) => redirect_302(&format!("/login.html?error={}", err.code())),
+        Err(err) => redirect_302(&format!(
+            "/login.html?oidc_error={}&error={}",
+            err.code(),
+            err.code()
+        )),
     }
 }
 
@@ -1415,7 +2171,7 @@ async fn api_oidc_callback(
             "idp_error"
         };
         return attach_optional_cookie(
-            redirect_302(&format!("/login.html?error={code}")),
+            redirect_302(&format!("/login.html?oidc_error={code}&error={code}")),
             Some(clear_tx),
         );
     }
@@ -1434,7 +2190,11 @@ async fn api_oidc_callback(
             let epoch = state.runtime.session_epoch();
             let claims = oidc::new_session("oidc", &user.sub, Some(user.to_json()), epoch, now);
             let signed = oidc::sign_session(state.runtime.master(), &claims);
-            let sess_sc = oidc::session_cookie(&signed, secure);
+            let sess_sc = oidc::session_cookie_with_ttl(
+                &signed,
+                secure,
+                state.settings.session_ttl.max_ttl_secs,
+            );
 
             let mut resp = redirect_302(&next_path);
             if let Ok(hv1) = HeaderValue::from_str(&clear_tx) {
@@ -1446,7 +2206,11 @@ async fn api_oidc_callback(
             resp
         }
         Err(err) => attach_optional_cookie(
-            redirect_302(&format!("/login.html?error={}", err.code())),
+            redirect_302(&format!(
+                "/login.html?oidc_error={}&error={}",
+                err.code(),
+                err.code()
+            )),
             Some(clear_tx),
         ),
     }
@@ -1553,8 +2317,8 @@ async fn serve_login_js() -> Response {
     let js = r#"(() => {
   const params = new URLSearchParams(window.location.search);
   const rawNext = params.get("next") || "/styles";
-  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/styles";
-  const err = params.get("error");
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") && !rawNext.startsWith("/\\") ? rawNext : "/styles";
+  const err = params.get("oidc_error") || params.get("error");
   const alertEl = document.getElementById("login-alert");
   const ssoLink = document.getElementById("sso-link");
   const detailsEl = document.getElementById("break-glass");
@@ -1578,8 +2342,20 @@ async fn serve_login_js() -> Response {
       not_allowed: "Your SSO account is not in OIDC_ALLOWED_USERS / OIDC_ALLOWED_GROUPS.",
       state_mismatch: "SSO state check failed. Please start sign-in again.",
       tx_expired: "SSO login window expired (5m). Please try again.",
+      tx_missing: "SSO login session cookie was missing or expired. Please try again.",
+      tx_invalid: "SSO transaction token could not be verified. Please try again.",
+      missing_code: "SSO provider returned without an authorization code.",
+      nonce_mismatch: "SSO ID token nonce verification failed.",
+      invalid_token: "SSO ID token validation failed.",
+      token_exchange: "SSO token exchange failed with the identity provider.",
+      oidc_discovery: "Could not reach OIDC issuer metadata endpoint.",
+      idp_error: "Identity provider returned an authentication error.",
     };
     showError(map[err] || ("SSO sign-in failed (" + err + ")."));
+    params.delete("oidc_error");
+    params.delete("error");
+    const qs = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? "?" + qs : ""));
   }
 
   const form = document.getElementById("mgmt-form");
@@ -1652,24 +2428,50 @@ async fn serve_public_spa(State(state): State<Arc<AppState>>) -> Response {
     serve_spa_index_response(&state).await
 }
 
+async fn serve_protected_spa_path(
+    state: &AppState,
+    headers: &HeaderMap,
+    login_redirect: &str,
+) -> Response {
+    if auth_is_active(state) && extract_principal(state, headers).is_none() {
+        return redirect_302(login_redirect);
+    }
+    serve_spa_index_response(state).await
+}
+
 async fn serve_protected_keys_spa(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Response {
-    if auth_is_active(&state) && extract_principal(&state, &headers).is_none() {
-        return redirect_302("/login.html?next=%2Fkeys");
-    }
-    serve_spa_index_response(&state).await
+    serve_protected_spa_path(&state, &headers, "/login.html?next=%2Fkeys").await
+}
+
+async fn serve_protected_api_keys_spa(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    serve_protected_spa_path(&state, &headers, "/login.html?next=%2Fapi-keys").await
+}
+
+async fn serve_protected_mcp_connectors_spa(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    serve_protected_spa_path(&state, &headers, "/login.html?next=%2Fmcp-connectors").await
+}
+
+async fn serve_protected_settings_spa(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    serve_protected_spa_path(&state, &headers, "/login.html?next=%2Fsettings").await
 }
 
 async fn serve_protected_admin_spa(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Response {
-    if auth_is_active(&state) && extract_principal(&state, &headers).is_none() {
-        return redirect_302("/login.html?next=%2Fadmin");
-    }
-    serve_spa_index_response(&state).await
+    serve_protected_spa_path(&state, &headers, "/login.html?next=%2Fadmin").await
 }
 
 async fn serve_spa_fallback(
@@ -1690,17 +2492,22 @@ async fn serve_spa_fallback(
             .into_response();
     }
 
-    if (clean == "keys" || clean.starts_with("keys/"))
-        && auth_is_active(&state)
-        && extract_principal(&state, &headers).is_none()
-    {
-        return redirect_302("/login.html?next=%2Fkeys");
-    }
-    if (clean == "admin" || clean.starts_with("admin/"))
-        && auth_is_active(&state)
-        && extract_principal(&state, &headers).is_none()
-    {
-        return redirect_302("/login.html?next=%2Fadmin");
+    if auth_is_active(&state) && extract_principal(&state, &headers).is_none() {
+        if clean == "keys" || clean.starts_with("keys/") {
+            return redirect_302("/login.html?next=%2Fkeys");
+        }
+        if clean == "api-keys" || clean.starts_with("api-keys/") {
+            return redirect_302("/login.html?next=%2Fapi-keys");
+        }
+        if clean == "mcp-connectors" || clean.starts_with("mcp-connectors/") {
+            return redirect_302("/login.html?next=%2Fmcp-connectors");
+        }
+        if clean == "settings" || clean.starts_with("settings/") {
+            return redirect_302("/login.html?next=%2Fsettings");
+        }
+        if clean == "admin" || clean.starts_with("admin/") {
+            return redirect_302("/login.html?next=%2Fadmin");
+        }
     }
 
     // Serve static files strictly confined within ui/dist, ui/public, or ui/
@@ -2072,7 +2879,7 @@ Vf8UC7ZUga203h6vN6bHdL0=
             .unwrap()
             .to_string();
 
-        // Verify GET /api/keys Zero-F12-Leak & /copy -> 410 Gone
+        // Verify GET /api/keys Zero-F12-Leak + POST /copy vault decrypt + audit.jsonl
         let keys_resp = client
             .get(format!("{app_base}/api/keys"))
             .header("cookie", &oidc_sess_cookie)
@@ -2080,23 +2887,213 @@ Vf8UC7ZUga203h6vN6bHdL0=
             .await
             .unwrap();
         assert_eq!(keys_resp.status(), StatusCode::OK);
+        assert!(keys_resp
+            .headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .contains("no-store"));
         let keys_body = keys_resp.text().await.unwrap();
         assert!(!keys_body.contains("raw_key"));
         assert!(!keys_body.contains("LegacyPlaintextToken99999"));
 
+        // GET /copy must be 405 Method Not Allowed
+        let copy_get_resp = client
+            .get(format!("{app_base}/api/keys/hub_default/copy"))
+            .header("cookie", &oidc_sess_cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(copy_get_resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+        // POST /copy returns 200 encrypted secret + no-store + audit.jsonl
         let copy_resp = client
             .post(format!("{app_base}/api/keys/hub_default/copy"))
             .header("cookie", &oidc_sess_cookie)
             .send()
             .await
             .unwrap();
-        assert_eq!(copy_resp.status(), StatusCode::GONE);
+        assert_eq!(copy_resp.status(), StatusCode::OK);
+        assert!(copy_resp
+            .headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .contains("no-store"));
+        let copy_json: Value = copy_resp.json().await.unwrap();
+        assert_eq!(copy_json["secret"], "styles_LegacyPlaintextToken99999");
+
+        // Canonical /api/admin/api-keys create -> patch rename -> copy -> delete
+        let created_key: Value = client
+            .post(format!("{app_base}/api/admin/api-keys"))
+            .header("cookie", &oidc_sess_cookie)
+            .json(&json!({ "label": "Canonical Key", "scopes": ["mcp:read", "styles:read"] }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let created_id = created_key["item"]["id"].as_str().unwrap().to_string();
+        let renamed_resp = client
+            .patch(format!("{app_base}/api/admin/api-keys/{created_id}"))
+            .header("cookie", &oidc_sess_cookie)
+            .json(&json!({ "label": "Canonical Key Renamed" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(renamed_resp.status(), StatusCode::OK);
+        let del_resp = client
+            .delete(format!("{app_base}/api/admin/api-keys/{created_id}"))
+            .header("cookie", &oidc_sess_cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(del_resp.status(), StatusCode::OK);
+
+        // Copy rate limit (15 / 5m / IP -> 16th returns 429 + Retry-After)
+        for _ in 0..15 {
+            let r = client
+                .post(format!("{app_base}/api/admin/api-keys/hub_default/copy"))
+                .header("cookie", &oidc_sess_cookie)
+                .header("x-forwarded-for", "10.88.1.99")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(r.status(), StatusCode::OK);
+        }
+        let copy_16th = client
+            .post(format!("{app_base}/api/admin/api-keys/hub_default/copy"))
+            .header("cookie", &oidc_sess_cookie)
+            .header("x-forwarded-for", "10.88.1.99")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(copy_16th.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(copy_16th.headers().contains_key("retry-after"));
+
+        // Global ?token=, ?key=, ?api_key= query params blocked with 400
+        for qs in ["?token=abc", "?key=abc", "?api_key=abc"] {
+            let qr = client
+                .get(format!("{app_base}/api/styles{qs}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(qr.status(), StatusCode::BAD_REQUEST);
+        }
+
+        // Protected SPA routes redirect to /login.html when unauthenticated
+        for p in ["/keys", "/api-keys", "/mcp-connectors", "/settings", "/admin"] {
+            let sr = client.get(format!("{app_base}{p}")).send().await.unwrap();
+            assert_eq!(sr.status(), StatusCode::FOUND);
+            assert!(sr
+                .headers()
+                .get("location")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("/login.html"));
+        }
+
+        // MCP Connectors create -> copy -> test -> rotate -> revoke -> delete
+        let conn_create: Value = client
+            .post(format!("{app_base}/api/admin/mcp-connectors"))
+            .header("cookie", &oidc_sess_cookie)
+            .json(&json!({ "name": "Playwright Agent" }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let conn_id = conn_create["item"]["id"].as_str().unwrap().to_string();
+        let conn_sec = conn_create["secret"].as_str().unwrap().to_string();
+        let conn_copy: Value = client
+            .post(format!("{app_base}/api/admin/mcp-connectors/{conn_id}/copy"))
+            .header("cookie", &oidc_sess_cookie)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(conn_copy["secret"], conn_sec);
+        let conn_test: Value = client
+            .post(format!("{app_base}/api/admin/mcp-connectors/{conn_id}/test"))
+            .header("cookie", &oidc_sess_cookie)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(conn_test["tools_count"], 8);
+        assert_eq!(conn_test["status"], "healthy");
+        let conn_del = client
+            .delete(format!("{app_base}/api/admin/mcp-connectors/{conn_id}"))
+            .header("cookie", &oidc_sess_cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(conn_del.status(), StatusCode::OK);
+
+        // Fetch session CSRF token + verify GET /logout -> 405, strict POST /logout CSRF & X-Forwarded-Host defense
+        let sess_info: Value = client
+            .get(format!("{app_base}/api/auth/session"))
+            .header("cookie", &oidc_sess_cookie)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let csrf_tok = sess_info["csrf_token"].as_str().unwrap().to_string();
+        assert!(!csrf_tok.is_empty());
+
+        let logout_get = client
+            .get(format!("{app_base}/api/auth/logout"))
+            .header("cookie", &oidc_sess_cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(logout_get.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+        let logout_no_csrf = client
+            .post(format!("{app_base}/api/auth/logout"))
+            .header("cookie", &oidc_sess_cookie)
+            .header("origin", &app_base)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(logout_no_csrf.status(), StatusCode::FORBIDDEN);
+
+        let logout_xfh_spoof = client
+            .post(format!("{app_base}/api/auth/logout"))
+            .header("cookie", &oidc_sess_cookie)
+            .header("origin", "https://evil.example")
+            .header("x-forwarded-host", "evil.example")
+            .header("x-csrf-token", &csrf_tok)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(logout_xfh_spoof.status(), StatusCode::FORBIDDEN);
+
+        let logout_ok = client
+            .post(format!("{app_base}/api/auth/logout"))
+            .header("cookie", &oidc_sess_cookie)
+            .header("origin", &app_base)
+            .header("x-csrf-token", &csrf_tok)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(logout_ok.status(), StatusCode::OK);
 
         // CSRF cross-origin POST rejected with 403
         let csrf_resp = client
             .post(format!("{app_base}/api/keys"))
             .header("cookie", &oidc_sess_cookie)
             .header("origin", "https://evil.example")
+            .header("x-forwarded-host", "evil.example")
             .json(&json!({ "label": "Attacker" }))
             .send()
             .await

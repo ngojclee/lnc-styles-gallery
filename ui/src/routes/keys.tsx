@@ -1,37 +1,50 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { useMemo, useState } from "react"
+import { Link, createFileRoute } from "@tanstack/react-router"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  AlertTriangleIcon,
-  BanIcon,
-  CheckCircle2Icon,
-  CheckIcon,
-  CopyIcon,
-  CpuIcon,
-  KeyRoundIcon,
-  PlusIcon,
-  RefreshCwIcon,
-  RotateCcwIcon,
-  ServerIcon,
-  ShieldCheckIcon,
-  Trash2Icon,
+  AlertTriangle,
+  ArrowRight,
+  Check,
+  Copy,
+  KeyRound,
+  Pencil,
+  Plug,
+  Plus,
+  RefreshCw,
+  RotateCw,
+  Search,
+  ShieldCheck,
+  ShieldOff,
+  Trash2,
 } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { toast } from "sonner"
 
 import {
   ApiHttpError,
   authSessionQuery,
+  copyApiKey,
   createApiKey,
   deleteApiKey,
   fetchApiKeysList,
   rotateApiKey,
   setApiKeyRevoked,
+  updateApiKey,
 } from "@/api/styles"
 import { AuthGateCard } from "@/components/common/AuthGateCard"
 import { PageHeader } from "@/components/common/PageHeader"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -39,571 +52,796 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { toast } from "@/lib/notifications"
+import { copyText } from "@/lib/clipboard"
+import { cn } from "@/lib/utils"
 import type { PublicApiKeyItem } from "@/types/styles"
 
 export const Route = createFileRoute("/keys")({
-  staticData: { title: "API Keys & MCP Access" },
-  component: ApiKeysPage,
+  component: KeysPage,
 })
 
-interface McpInfo {
-  endpoint: string
-  namespace: string
-  transport: string
-  auth_required: boolean
-  tools: { name: string; description: string }[]
-  tools_count: number
+const SCOPE_PRESETS: Array<{ value: string; label: string; scopes: string[] }> = [
+  {
+    value: "read",
+    label: "Read Catalog & MCP (mcp:read)",
+    scopes: ["mcp:read"],
+  },
+  {
+    value: "read_admin",
+    label: "Read + Reindex (mcp:read, admin:reindex)",
+    scopes: ["mcp:read", "admin:reindex"],
+  },
+]
+
+function presetValueFromScopes(scopes?: string[]): string {
+  if (scopes?.includes("admin:reindex")) return "read_admin"
+  return "read"
 }
 
-function formatMaskedToken(item: PublicApiKeyItem): string {
-  if (item.masked && !item.masked.includes("undefined")) {
-    return item.masked
-  }
-  const suffix = item.last4 ? item.last4 : ""
-  return `${item.prefix}••••••••${suffix}`
+function formatDate(ts?: string | null): string {
+  if (!ts) return "—"
+  const parsed = new Date(ts)
+  if (Number.isNaN(parsed.getTime())) return ts
+  return parsed.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
 }
 
-function ApiKeysPage() {
+export function KeysPage() {
   const queryClient = useQueryClient()
   const sessionQuery = useQuery(authSessionQuery)
   const session = sessionQuery.data
-
-  const [mcpInfo, setMcpInfo] = useState<McpInfo | null>(null)
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "revoked">("all")
-  const [isCreateOpen, setIsCreateOpen] = useState(false)
-  const [label, setLabel] = useState("")
-  const [customSecret, setCustomSecret] = useState("")
-  const [createdSecret, setCreatedSecret] = useState<string | null>(null)
-  const [copiedSlot, setCopiedSlot] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const [rotateDialog, setRotateDialog] = useState<{
-    open: boolean
-    keyId: string
-    label: string
-    newKey?: string
-    rotating?: boolean
-  } | null>(null)
-
   const mustSignIn = Boolean(session?.auth_required && !session?.authenticated)
 
   const keysQuery = useQuery({
     queryKey: ["api-keys", session?.authenticated, session?.session_epoch],
     queryFn: fetchApiKeysList,
-    enabled: !mustSignIn,
+    enabled: Boolean(session && !mustSignIn),
     retry: false,
   })
 
-  useEffect(() => {
-    let active = true
-    fetch("/api/mcp/info", { credentials: "same-origin" })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (active && data) setMcpInfo(data as McpInfo)
-      })
-      .catch(() => {
-        /* non-fatal */
-      })
-    return () => {
-      active = false
-    }
-  }, [])
+  const [label, setLabel] = useState("")
+  const [scopePreset, setScopePreset] = useState("read")
+  const [customSecret, setCustomSecret] = useState("")
+  const [showCustomSecret, setShowCustomSecret] = useState(false)
+  const [creating, setCreating] = useState(false)
 
-  const isUnauthorizedError =
-    keysQuery.error instanceof ApiHttpError && keysQuery.error.status === 401
+  const [revealedSecret, setRevealedSecret] = useState<string | null>(null)
+  const [revealedLabel, setRevealedLabel] = useState<string>("")
+  const [fallbackSecret, setFallbackSecret] = useState<{ label: string; value: string } | null>(null)
+  const [copyingId, setCopyingId] = useState<string | null>(null)
+  const [copiedBanner, setCopiedBanner] = useState(false)
+
+  const [searchQuery, setSearchQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "revoked">("all")
+
+  const [renameTarget, setRenameTarget] = useState<PublicApiKeyItem | null>(null)
+  const [renameLabel, setRenameLabel] = useState("")
+  const [renameScopePreset, setRenameScopePreset] = useState("read")
+  const [savingRename, setSavingRename] = useState(false)
+
+  const [rotateTarget, setRotateTarget] = useState<PublicApiKeyItem | null>(null)
+  const [rotating, setRotating] = useState(false)
+
+  const [revokeTarget, setRevokeTarget] = useState<PublicApiKeyItem | null>(null)
+  const [togglingRevoke, setTogglingRevoke] = useState(false)
+
+  const [deleteTarget, setDeleteTarget] = useState<PublicApiKeyItem | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  const isUnauthorized =
+    mustSignIn ||
+    (keysQuery.error instanceof ApiHttpError && keysQuery.error.status === 401)
 
   const keys = keysQuery.data?.keys ?? []
   const filteredKeys = useMemo(() => {
-    if (statusFilter === "active") return keys.filter((k) => k.enabled)
-    if (statusFilter === "revoked") return keys.filter((k) => !k.enabled)
-    return keys
-  }, [keys, statusFilter])
-
-  const copyOnceSecret = (secret: string, slot: string) => {
-    navigator.clipboard.writeText(secret)
-    setCopiedSlot(slot)
-    toast.success("Token copied to clipboard")
-    setTimeout(() => setCopiedSlot(null), 2000)
-  }
-
-  const closeCreateModal = () => {
-    setIsCreateOpen(false)
-    setCreatedSecret(null)
-    setCustomSecret("")
-    setLabel("")
-  }
-
-  const closeRotateModal = () => {
-    setRotateDialog(null)
-  }
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!label.trim()) {
-      toast.error("Please provide a key name or label")
-      return
-    }
-    setSubmitting(true)
-    try {
-      const data = await createApiKey({
-        label: label.trim(),
-        custom_secret: customSecret.trim() || undefined,
-      })
-      setCreatedSecret(data.key)
-      setLabel("")
-      setCustomSecret("")
-      toast.success("API key created — copy it now (shown only once)")
-      await queryClient.invalidateQueries({ queryKey: ["api-keys"] })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create key")
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const handleRevoke = async (keyId: string, revoke: boolean) => {
-    try {
-      await setApiKeyRevoked(keyId, revoke)
-      toast.success(revoke ? "API key revoked" : "API key re-enabled")
-      await queryClient.invalidateQueries({ queryKey: ["api-keys"] })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update key")
-    }
-  }
-
-  const handleExecuteRotate = async () => {
-    if (!rotateDialog) return
-    setRotateDialog((prev) => (prev ? { ...prev, rotating: true } : null))
-    try {
-      const data = await rotateApiKey(rotateDialog.keyId)
-      setRotateDialog((prev) =>
-        prev ? { ...prev, rotating: false, newKey: data.key } : null
+    const q = searchQuery.trim().toLowerCase()
+    return keys.filter((item) => {
+      if (statusFilter === "active" && !item.enabled) return false
+      if (statusFilter === "revoked" && item.enabled) return false
+      if (!q) return true
+      return (
+        item.label.toLowerCase().includes(q) ||
+        item.id.toLowerCase().includes(q) ||
+        item.prefix.toLowerCase().includes(q)
       )
-      toast.success(`Key "${rotateDialog.label}" rotated — copy the new secret now`)
-      await queryClient.invalidateQueries({ queryKey: ["api-keys"] })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to rotate key")
-      setRotateDialog((prev) => (prev ? { ...prev, rotating: false } : null))
-    }
-  }
+    })
+  }, [keys, searchQuery, statusFilter])
 
-  const handleDelete = async (keyId: string, keyLabel: string) => {
-    if (
-      !window.confirm(
-        `Permanently DELETE key "${keyLabel}"? Any connected agents using this token will fail immediately.`
-      )
-    ) {
-      return
-    }
-    try {
-      await deleteApiKey(keyId)
-      toast.success(`Key "${keyLabel}" permanently deleted`)
-      await queryClient.invalidateQueries({ queryKey: ["api-keys"] })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete key")
-    }
-  }
+  const activeCount = keys.filter((k) => k.enabled).length
+  const revokedCount = keys.length - activeCount
+  const vaultCount = keys.filter((k) => k.copy_available).length
 
-  const endpoint = mcpInfo?.endpoint ?? "https://styles.lengoc.me/mcp"
-  const namespace = mcpInfo?.namespace ?? "styles__*"
-
-  if (mustSignIn || isUnauthorizedError) {
+  if (isUnauthorized) {
     return (
-      <div className="flex flex-col gap-6">
+      <main className="flex-1 space-y-6">
         <PageHeader
-          title="API Keys & MCP Access"
-          description="Authenticate via LNC SSO or break-glass management key to issue, rotate, or revoke MCP Bearer tokens."
+          icon={KeyRound}
+          title="API Keys"
+          description="Issue, copy, rotate, revoke, and audit bearer keys for REST API and MCP clients."
         />
         <AuthGateCard
           nextPath="/keys"
-          oidcEnabled={session?.oidc_enabled ?? true}
-          mgmtKeyConfigured={session?.mgmt_key_configured ?? true}
-          onAuthenticated={() => {
-            queryClient.invalidateQueries({ queryKey: ["api-keys"] })
-          }}
+          oidcEnabled={session?.oidc_enabled}
+          mgmtKeyConfigured={session?.mgmt_key_configured}
+          onAuthenticated={() => queryClient.invalidateQueries()}
         />
-      </div>
+      </main>
     )
   }
 
+  const handleCopyValue = async (secretValue: string, displayLabel: string) => {
+    const ok = await copyText(secretValue, (manualValue) => {
+      setFallbackSecret({ label: displayLabel, value: manualValue })
+    })
+    if (ok) {
+      toast.success(`Copied key "${displayLabel}" to clipboard`)
+    } else {
+      toast.info("Clipboard blocked — copy manually from the dialog")
+    }
+    return ok
+  }
+
+  const handleCreate = async (e?: React.FormEvent) => {
+    e?.preventDefault()
+    const cleanLabel = label.trim()
+    if (!cleanLabel) {
+      toast.error("Enter a label for the new API key.")
+      return
+    }
+    const preset = SCOPE_PRESETS.find((p) => p.value === scopePreset) ?? SCOPE_PRESETS[0]
+    setCreating(true)
+    try {
+      const res = await createApiKey({
+        label: cleanLabel,
+        scopes: preset.scopes,
+        ...(customSecret.trim() ? { custom_secret: customSecret.trim() } : {}),
+      })
+      setLabel("")
+      setCustomSecret("")
+      setShowCustomSecret(false)
+      setRevealedSecret(res.key)
+      setRevealedLabel(res.item.label)
+      await queryClient.invalidateQueries({ queryKey: ["api-keys"] })
+      toast.success(`API key "${res.item.label}" issued and sealed in vault`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create API key")
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handleVaultCopy = async (item: PublicApiKeyItem) => {
+    if (!item.copy_available) {
+      toast.info("Legacy hash-only key cannot be copied. Rotate it to enable HKDF vault copy.")
+      return
+    }
+    setCopyingId(item.id)
+    try {
+      const res = await copyApiKey(item.id)
+      await handleCopyValue(res.secret, item.label)
+      await queryClient.invalidateQueries({ queryKey: ["admin-settings"] })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Copy failed")
+    } finally {
+      setCopyingId(null)
+    }
+  }
+
+  const handleSaveRename = async (e?: React.FormEvent) => {
+    e?.preventDefault()
+    if (!renameTarget) return
+    const cleanLabel = renameLabel.trim()
+    if (!cleanLabel) {
+      toast.error("Label cannot be empty.")
+      return
+    }
+    const preset = SCOPE_PRESETS.find((p) => p.value === renameScopePreset) ?? SCOPE_PRESETS[0]
+    setSavingRename(true)
+    try {
+      await updateApiKey(renameTarget.id, {
+        label: cleanLabel,
+        scopes: preset.scopes,
+      })
+      setRenameTarget(null)
+      await queryClient.invalidateQueries({ queryKey: ["api-keys"] })
+      toast.success(`Updated key "${cleanLabel}"`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update key")
+    } finally {
+      setSavingRename(false)
+    }
+  }
+
+  const handleConfirmRotate = async () => {
+    if (!rotateTarget) return
+    setRotating(true)
+    try {
+      const res = await rotateApiKey(rotateTarget.id)
+      setRevealedSecret(res.key)
+      setRevealedLabel(res.item.label)
+      setRotateTarget(null)
+      await queryClient.invalidateQueries({ queryKey: ["api-keys"] })
+      toast.success(`Rotated "${res.item.label}" — previous secret invalidated`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to rotate API key")
+    } finally {
+      setRotating(false)
+    }
+  }
+
+  const handleToggleRevoke = async (item: PublicApiKeyItem, revoke: boolean) => {
+    setTogglingRevoke(true)
+    try {
+      await setApiKeyRevoked(item.id, revoke)
+      setRevokeTarget(null)
+      await queryClient.invalidateQueries({ queryKey: ["api-keys"] })
+      toast.success(
+        revoke ? `Revoked key "${item.label}"` : `Re-enabled key "${item.label}"`
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update key status")
+    } finally {
+      setTogglingRevoke(false)
+    }
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await deleteApiKey(deleteTarget.id)
+      const deletedName = deleteTarget.label
+      setDeleteTarget(null)
+      await queryClient.invalidateQueries({ queryKey: ["api-keys"] })
+      toast.success(`Removed API key "${deletedName}"`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove API key")
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
-    <div className="flex flex-col gap-6">
+    <main className="flex-1 space-y-6">
       <PageHeader
-        title="API Keys & MCP Access"
-        description="Manage HMAC-hashed Bearer tokens for external agents, Streamable HTTP MCP clients, and Business MCP Hub. Raw secrets are shown once at creation or rotation and never stored in plaintext."
+        icon={KeyRound}
+        title="API Keys"
+        description="Manage HKDF AES-256-GCM vault-backed API keys with Copy · Rename · Rotate · Revoke · Remove."
         actions={
-          <Button onClick={() => setIsCreateOpen(true)} className="gap-1.5">
-            <PlusIcon className="size-4" />
-            <span>Generate New Key</span>
-          </Button>
+          <>
+            <Button asChild variant="outline" size="sm" className="h-7 whitespace-nowrap">
+              <Link to="/mcp-connectors">
+                <Plug className="size-3.5" />
+                <span>MCP Connectors</span>
+                <ArrowRight className="size-3.5" />
+              </Link>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 whitespace-nowrap"
+              onClick={() => keysQuery.refetch()}
+              disabled={keysQuery.isFetching}
+            >
+              <RefreshCw className={cn("size-3.5", keysQuery.isFetching && "animate-spin")} />
+              <span>Refresh</span>
+            </Button>
+          </>
         }
       />
 
-      {/* Overview Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <div className="rounded-xl border bg-card p-4 shadow-xs">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <ServerIcon className="size-4 text-primary" />
-            <span className="text-xs font-semibold tracking-wider uppercase">MCP Endpoint</span>
-          </div>
-          <div className="mt-2 truncate font-mono text-sm font-semibold text-foreground select-all">
-            {endpoint}
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {mcpInfo?.transport ?? "Streamable HTTP JSON-RPC 2.0"}
-          </p>
-        </div>
-
-        <div className="rounded-xl border bg-card p-4 shadow-xs">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <ShieldCheckIcon className="size-4 text-emerald-500" />
-            <span className="text-xs font-semibold tracking-wider uppercase">Token Storage</span>
-          </div>
-          <div className="mt-2 text-sm font-semibold text-foreground">
-            {mcpInfo?.auth_required ? "Bearer Gate Enforced" : "Salted HMAC-SHA256 Vault"}
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Zero-F12-Leak: only key prefix + last 4 chars are retained after creation
-          </p>
-        </div>
-
-        <div className="rounded-xl border bg-card p-4 shadow-xs">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <CpuIcon className="size-4 text-blue-500" />
-            <span className="text-xs font-semibold tracking-wider uppercase">Business MCP Hub</span>
-          </div>
-          <div className="mt-2 text-sm font-semibold text-foreground">
-            Online · {mcpInfo?.tools_count ?? 8} Tools Active
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Exposes {namespace} tools across fleet agents
-          </p>
-        </div>
-      </div>
-
-      {/* Keys List */}
-      <div className="overflow-hidden rounded-2xl border bg-card shadow-xs">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-5 py-3.5">
-          <div className="flex items-center gap-2">
-            <KeyRoundIcon className="size-4 text-primary" />
-            <h3 className="text-sm font-semibold">Issued API Tokens</h3>
-            <Badge variant="secondary" className="font-mono text-[11px]">
-              {filteredKeys.length}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Card className="border-border/70">
+          <CardContent className="flex items-center justify-between py-3.5">
+            <div>
+              <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                Active Keys
+              </p>
+              <p className="text-xl font-bold tabular-nums">{activeCount}</p>
+            </div>
+            <Badge variant="outline" className="border-emerald-500/40 bg-emerald-500/10 text-emerald-500">
+              {keys.length} total
             </Badge>
-          </div>
-          <div className="flex items-center gap-2">
-            <Select
-              value={statusFilter}
-              onValueChange={(v) => setStatusFilter(v as "all" | "active" | "revoked")}
-            >
-              <SelectTrigger size="sm" className="w-[148px] text-xs">
-                <SelectValue placeholder="Filter status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Tokens</SelectItem>
-                <SelectItem value="active">Active Only</SelectItem>
-                <SelectItem value="revoked">Revoked Only</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => keysQuery.refetch()}
-              className="h-8 gap-1 text-xs text-muted-foreground"
-            >
-              <RotateCcwIcon className="size-3.5" />
-              <span>Refresh</span>
-            </Button>
-          </div>
-        </div>
-
-        <div className="divide-y">
-          {keysQuery.isLoading ? (
-            <div className="p-8 text-center text-sm text-muted-foreground">
-              Loading API keys...
+          </CardContent>
+        </Card>
+        <Card className="border-border/70">
+          <CardContent className="flex items-center justify-between py-3.5">
+            <div>
+              <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                Vault Sealed
+              </p>
+              <p className="text-xl font-bold tabular-nums">{vaultCount}</p>
             </div>
-          ) : filteredKeys.length === 0 ? (
-            <div className="p-8 text-center text-sm text-muted-foreground">
-              No matching API keys found. Click "Generate New Key" to issue a token.
+            <Badge variant="secondary" className="font-mono text-[11px]">
+              AES-256-GCM
+            </Badge>
+          </CardContent>
+        </Card>
+        <Card className="border-border/70">
+          <CardContent className="flex items-center justify-between py-3.5">
+            <div>
+              <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                Revoked Keys
+              </p>
+              <p className="text-xl font-bold tabular-nums">{revokedCount}</p>
             </div>
-          ) : (
-            filteredKeys.map((k) => (
-              <div
-                key={k.id}
-                className="flex flex-col justify-between gap-4 p-4 lg:flex-row lg:items-center"
+            <Badge variant="outline" className="text-[11px]">
+              {revokedCount === 0 ? "Clean" : "Blocked"}
+            </Badge>
+          </CardContent>
+        </Card>
+      </div>
+
+      {revealedSecret ? (
+        <Card className="border-emerald-500/40 bg-emerald-500/5">
+          <CardHeader className="pb-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-emerald-500">
+                <ShieldCheck className="size-4" />
+                <CardTitle className="text-sm font-semibold">
+                  Key ready: {revealedLabel}
+                </CardTitle>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  setRevealedSecret(null)
+                  setRevealedLabel("")
+                }}
               >
-                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold text-foreground">{k.label}</span>
-                    <Badge
-                      variant={k.enabled ? "outline" : "secondary"}
-                      className={`text-[10px] ${
-                        k.enabled
-                          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                          : "border-destructive/30 bg-destructive/10 text-destructive"
-                      }`}
-                    >
-                      {k.enabled ? "Active" : "Revoked / Disabled"}
-                    </Badge>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span className="text-xs font-medium">Identifier:</span>
-                    <code className="inline-flex items-center rounded-md border bg-muted/80 px-2 py-0.5 font-mono text-xs tracking-wide text-foreground">
-                      {formatMaskedToken(k)}
-                    </code>
-                    {k.created ? (
-                      <span className="ml-1 text-[11px] text-muted-foreground">
-                        Created: {new Date(k.created).toLocaleDateString()}
-                      </span>
-                    ) : null}
-                    {k.rotated_at ? (
-                      <span className="text-[11px] text-muted-foreground">
-                        · Rotated: {new Date(k.rotated_at).toLocaleDateString()}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="flex shrink-0 flex-wrap items-center gap-1.5 self-start lg:self-center">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1 text-xs text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/40"
-                    onClick={() => setRotateDialog({ open: true, keyId: k.id, label: k.label })}
-                    title="Rotate key and issue a new one-time token"
-                  >
-                    <RefreshCwIcon className="size-3.5" />
-                    <span>Rotate</span>
-                  </Button>
-                  {k.enabled ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1 text-xs text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/40"
-                      onClick={() => handleRevoke(k.id, true)}
-                      title="Deactivate this key"
-                    >
-                      <BanIcon className="size-3.5" />
-                      <span>Revoke</span>
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1 text-xs text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
-                      onClick={() => handleRevoke(k.id, false)}
-                      title="Reactivate this key"
-                    >
-                      <CheckCircle2Icon className="size-3.5" />
-                      <span>Enable</span>
-                    </Button>
-                  )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    onClick={() => handleDelete(k.id, k.label)}
-                    title="Permanently remove key"
-                  >
-                    <Trash2Icon className="size-3.5" />
-                    <span>Delete</span>
-                  </Button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* Integration Guide */}
-      <div className="flex flex-col gap-4 rounded-2xl border bg-muted/40 p-5 text-xs">
-        <h3 className="text-sm font-semibold text-foreground">
-          How to Connect from AI Agents & MCP Clients
-        </h3>
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
-            <h4 className="text-xs font-semibold text-foreground">
-              1. Central Business MCP Hub Registration
-            </h4>
-            <p className="leading-relaxed text-muted-foreground">
-              Connected into the central Business MCP Hub exposing tools with prefix{" "}
-              <code className="font-semibold text-foreground">{namespace}</code>.
-            </p>
-            <pre className="overflow-x-auto rounded-lg bg-neutral-950 p-3 font-mono text-[11px] leading-relaxed text-neutral-300">
-              {`# Connect directly to Streamable HTTP MCP
-POST ${endpoint}
-Headers:
-  Authorization: Bearer <YOUR_API_KEY>
-  Content-Type: application/json
-  Accept: application/json, text/event-stream`}
-            </pre>
-          </div>
-
-          <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
-            <h4 className="text-xs font-semibold text-foreground">2. Available MCP Tools</h4>
-            <ul className="list-disc space-y-1 pl-4 text-muted-foreground">
-              {(mcpInfo?.tools ?? []).map((t) => (
-                <li key={t.name}>
-                  <code className="font-semibold text-foreground">styles__{t.name}</code>:{" "}
-                  {t.description.split(".")[0]}.
-                </li>
-              ))}
-              {!mcpInfo ? <li>Loading tool list…</li> : null}
-            </ul>
-          </div>
-        </div>
-      </div>
-
-      {/* Create Key Dialog (one-time secret display) */}
-      <Dialog
-        open={isCreateOpen}
-        onOpenChange={(o) => {
-          if (!o) closeCreateModal()
-        }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Generate New API Key</DialogTitle>
-          </DialogHeader>
-          {createdSecret ? (
-            <div className="my-2 flex flex-col gap-4">
-              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">
-                <strong>Shown once only:</strong> Copy and store this token in your vault now. For security, only its salted HMAC-SHA256 digest is persisted on the server.
-              </div>
-              <div className="flex items-center gap-2 rounded-xl bg-muted p-3 font-mono text-xs break-all">
-                <span className="flex-1 font-semibold text-foreground select-all">
-                  {createdSecret}
-                </span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 shrink-0 gap-1 text-xs"
-                  onClick={() => copyOnceSecret(createdSecret, "newly_created")}
-                >
-                  {copiedSlot === "newly_created" ? (
-                    <CheckIcon className="size-3.5 text-emerald-500" />
-                  ) : (
-                    <CopyIcon className="size-3.5" />
-                  )}
-                  <span>Copy</span>
-                </Button>
-              </div>
-              <Button onClick={closeCreateModal} className="w-full">
-                I Have Saved This Token
+                Dismiss
               </Button>
             </div>
-          ) : (
-            <form onSubmit={handleCreate} className="my-2 flex flex-col gap-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-foreground">
-                  Key Name / Client Label
-                </label>
+            <CardDescription className="text-xs">
+              Sealed in HKDF vault storage. Copy now or use the audited Copy action in the table below.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-emerald-500/30 bg-background/90 px-3 py-2 font-mono text-xs text-foreground select-all">
+              {revealedSecret}
+            </code>
+            <Button
+              size="sm"
+              className="h-7 shrink-0 whitespace-nowrap"
+              onClick={async () => {
+                const ok = await handleCopyValue(revealedSecret, revealedLabel)
+                if (ok) {
+                  setCopiedBanner(true)
+                  setTimeout(() => setCopiedBanner(false), 1800)
+                }
+              }}
+            >
+              {copiedBanner ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              <span>{copiedBanner ? "Copied" : "Copy Key"}</span>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Card className="border-border/70">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Issue New API Key</CardTitle>
+          <CardDescription className="text-xs">
+            Keys are hashed with SHA-256 for Bearer lookup and sealed in HKDF AES-256-GCM vault storage for audited admin copy.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div
+            className="space-y-3"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && e.target instanceof HTMLInputElement && !creating) {
+                e.preventDefault()
+                void handleCreate()
+              }
+            }}
+          >
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_280px_auto]">
+              <div className="space-y-1.5">
+                <Label htmlFor="new-key-label" className="text-xs">
+                  Key Label
+                </Label>
                 <Input
+                  id="new-key-label"
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
-                  placeholder="e.g. Business MCP Hub, Agent Hermes"
-                  required
+                  placeholder="e.g. local-claude-code"
+                  maxLength={80}
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-foreground">
-                  Custom Secret (Optional, min 16 chars)
-                </label>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs">Scopes</Label>
+                <Select value={scopePreset} onValueChange={setScopePreset}>
+                  <SelectTrigger className="w-full" aria-label="New key scopes">
+                    <SelectValue placeholder="Select scope preset" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SCOPE_PRESETS.map((preset) => (
+                      <SelectItem key={preset.value} value={preset.value}>
+                        {preset.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  disabled={creating}
+                  className="w-full md:w-auto"
+                  onClick={() => void handleCreate()}
+                >
+                  <Plus className="size-4" />
+                  <span>{creating ? "Issuing..." : "Issue Key"}</span>
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <button
+                type="button"
+                className="text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                onClick={() => setShowCustomSecret((prev) => !prev)}
+              >
+                {showCustomSecret ? "Hide optional custom key input" : "Use custom secret value (optional)"}
+              </button>
+              {showCustomSecret ? (
+                <div className="space-y-1">
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
+                    value={customSecret}
+                    onChange={(e) => setCustomSecret(e.target.value)}
+                    placeholder="Leave blank to auto-generate lnc_sg_... secret"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Leave blank for a cryptographically random token (minimum 12 chars if supplied).
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/70">
+        <CardHeader className="space-y-3 pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">Issued API Keys</CardTitle>
+              <CardDescription className="text-xs">
+                GET endpoints return masked previews only. Copy triggers a rate-limited POST audit event.
+              </CardDescription>
+            </div>
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+              <div className="relative min-w-0 flex-1 sm:w-56">
+                <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  type="password"
-                  value={customSecret}
-                  onChange={(e) => setCustomSecret(e.target.value)}
-                  placeholder="Leave empty to auto-generate a CSPRNG token"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Filter keys..."
+                  className="h-8 pl-8 text-xs"
+                  aria-label="Filter API keys"
                 />
-                <span className="text-[11px] text-muted-foreground">
-                  If empty, a 256-bit CSPRNG token starting with{" "}
-                  <code className="font-mono">styles_...</code> is generated.
-                </span>
               </div>
-              <div className="mt-2 flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={closeCreateModal}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={submitting}>
-                  {submitting ? "Generating..." : "Generate API Key"}
-                </Button>
-              </div>
-            </form>
+              <Select
+                value={statusFilter}
+                onValueChange={(v) => setStatusFilter(v as "all" | "active" | "revoked")}
+              >
+                <SelectTrigger size="sm" aria-label="Filter key status">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="active">Active Only</SelectItem>
+                  <SelectItem value="revoked">Revoked Only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </CardHeader>
+
+        <CardContent>
+          {keysQuery.isLoading ? (
+            <p className="py-6 text-center text-xs text-muted-foreground">Loading API keys...</p>
+          ) : filteredKeys.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border/70 py-8 text-center">
+              <p className="text-sm font-medium">No API keys match the current filter</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Issue a key above or adjust the search/status filter.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border/60 rounded-xl border border-border/70">
+              {filteredKeys.map((item) => (
+                <div
+                  key={item.id}
+                  data-key-row={item.id}
+                  className="flex flex-col gap-3 px-4 py-3.5 lg:flex-row lg:items-center lg:justify-between"
+                >
+                  <div className="min-w-0 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate font-medium text-sm">{item.label}</span>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[11px]",
+                          item.enabled
+                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
+                            : "border-destructive/40 bg-destructive/10 text-destructive"
+                        )}
+                      >
+                        {item.enabled ? "Active" : "Revoked"}
+                      </Badge>
+                      <Badge variant="secondary" className="text-[11px]">
+                        {item.copy_available ? "Vault Copy" : "Legacy Hash"}
+                      </Badge>
+                      <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                        {item.masked || `${item.prefix}...${item.last4 ?? "****"}`}
+                      </code>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                      <span>ID: {item.id}</span>
+                      <span>Created: {formatDate(item.created)}</span>
+                      {item.rotated_at ? <span>Rotated: {formatDate(item.rotated_at)}</span> : null}
+                      {item.revoked_at ? <span>Revoked: {formatDate(item.revoked_at)}</span> : null}
+                      <span className="inline-flex flex-wrap items-center gap-1">
+                        {(item.scopes ?? ["mcp:read"]).map((scope) => (
+                          <Badge key={scope} variant="outline" className="px-1.5 py-0 font-mono text-[10px]">
+                            {scope}
+                          </Badge>
+                        ))}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    data-action-bar="api-key"
+                    className="flex flex-wrap items-center gap-1.5 sm:flex-nowrap shrink-0"
+                  >
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 shrink-0 px-2.5 text-xs whitespace-nowrap"
+                      disabled={!item.copy_available || copyingId === item.id}
+                      title={
+                        item.copy_available
+                          ? "Decrypt and copy API key (audited)"
+                          : "Legacy hash-only key — rotate to enable encrypted copy"
+                      }
+                      onClick={() => handleVaultCopy(item)}
+                    >
+                      <Copy className="size-3.5" />
+                      <span>{copyingId === item.id ? "Copying..." : "Copy"}</span>
+                    </Button>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 shrink-0 px-2.5 text-xs whitespace-nowrap"
+                      onClick={() => {
+                        setRenameTarget(item)
+                        setRenameLabel(item.label)
+                        setRenameScopePreset(presetValueFromScopes(item.scopes))
+                      }}
+                    >
+                      <Pencil className="size-3.5" />
+                      <span>Rename</span>
+                    </Button>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 shrink-0 px-2.5 text-xs whitespace-nowrap"
+                      onClick={() => setRotateTarget(item)}
+                    >
+                      <RotateCw className="size-3.5" />
+                      <span>Rotate</span>
+                    </Button>
+
+                    {item.enabled ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 shrink-0 px-2.5 text-xs whitespace-nowrap text-amber-600 hover:text-amber-500 dark:text-amber-400"
+                        onClick={() => setRevokeTarget(item)}
+                      >
+                        <ShieldOff className="size-3.5" />
+                        <span>Revoke</span>
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 shrink-0 px-2.5 text-xs whitespace-nowrap text-emerald-600 hover:text-emerald-500 dark:text-emerald-400"
+                        disabled={togglingRevoke}
+                        onClick={() => handleToggleRevoke(item, false)}
+                      >
+                        <ShieldCheck className="size-3.5" />
+                        <span>Enable</span>
+                      </Button>
+                    )}
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 shrink-0 px-2.5 text-xs whitespace-nowrap text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={() => setDeleteTarget(item)}
+                    >
+                      <Trash2 className="size-3.5" />
+                      <span>Remove</span>
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Rename & Scope Modal */}
+      <Dialog open={Boolean(renameTarget)} onOpenChange={(open) => !open && setRenameTarget(null)}>
+        <DialogContent>
+          <div
+            className="space-y-4"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && e.target instanceof HTMLInputElement && !savingRename) {
+                e.preventDefault()
+                void handleSaveRename()
+              }
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Edit API Key</DialogTitle>
+              <DialogDescription>
+                Update the key label or assigned capability scopes without changing its secret.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="rename-key-label" className="text-xs">
+                  Label
+                </Label>
+                <Input
+                  id="rename-key-label"
+                  value={renameLabel}
+                  onChange={(e) => setRenameLabel(e.target.value)}
+                  maxLength={80}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Scopes</Label>
+                <Select value={renameScopePreset} onValueChange={setRenameScopePreset}>
+                  <SelectTrigger className="w-full" aria-label="Edit key scopes">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SCOPE_PRESETS.map((preset) => (
+                      <SelectItem key={preset.value} value={preset.value}>
+                        {preset.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setRenameTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={savingRename}
+                onClick={() => void handleSaveRename()}
+              >
+                {savingRename ? "Saving..." : "Save Changes"}
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
-      {/* Rotate Key Dialog (one-time secret display) */}
-      <Dialog
-        open={Boolean(rotateDialog?.open)}
-        onOpenChange={(o) => {
-          if (!o) closeRotateModal()
-        }}
-      >
-        <DialogContent className="max-w-md">
+      {/* Rotate Modal */}
+      <Dialog open={Boolean(rotateTarget)} onOpenChange={(open) => !open && setRotateTarget(null)}>
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle>Rotate API Key</DialogTitle>
+            <DialogTitle>Rotate API Key?</DialogTitle>
+            <DialogDescription>
+              Rotating <strong>{rotateTarget?.label}</strong> immediately generates a new vault-sealed token and invalidates the previous secret across all clients.
+            </DialogDescription>
           </DialogHeader>
-          {rotateDialog?.newKey ? (
-            <div className="my-2 flex flex-col gap-4">
-              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">
-                <strong>Shown once only:</strong> Copy this replacement token now. The previous secret has been permanently invalidated.
-              </div>
-              <div className="flex items-center gap-2 rounded-xl bg-muted p-3 font-mono text-xs break-all">
-                <span className="flex-1 font-semibold text-foreground select-all">
-                  {rotateDialog.newKey}
-                </span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 shrink-0 gap-1 text-xs"
-                  onClick={() => copyOnceSecret(rotateDialog.newKey!, "rotated_key")}
-                >
-                  {copiedSlot === "rotated_key" ? (
-                    <CheckIcon className="size-3.5 text-emerald-500" />
-                  ) : (
-                    <CopyIcon className="size-3.5" />
-                  )}
-                  <span>Copy</span>
-                </Button>
-              </div>
-              <Button onClick={closeRotateModal} className="w-full">
-                I Have Saved This Token
-              </Button>
-            </div>
-          ) : (
-            <div className="my-2 flex flex-col gap-4">
-              <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">
-                <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-600" />
-                <span>
-                  Rotating key{" "}
-                  <strong className="font-semibold">"{rotateDialog?.label}"</strong> will
-                  invalidate the existing secret immediately. Any client or agent using the
-                  previous token must be updated.
-                </span>
-              </div>
-              <div className="mt-2 flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={closeRotateModal}>
-                  Cancel
-                </Button>
-                <Button
-                  variant="default"
-                  onClick={handleExecuteRotate}
-                  disabled={rotateDialog?.rotating}
-                  className="gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
-                >
-                  <RefreshCwIcon
-                    className={`size-3.5 ${rotateDialog?.rotating ? "animate-spin" : ""}`}
-                  />
-                  <span>{rotateDialog?.rotating ? "Rotating..." : "Rotate Key Now"}</span>
-                </Button>
-              </div>
-            </div>
-          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRotateTarget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmRotate} disabled={rotating}>
+              {rotating ? "Rotating..." : "Confirm Rotate"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+
+      {/* Revoke Modal */}
+      <Dialog open={Boolean(revokeTarget)} onOpenChange={(open) => !open && setRevokeTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="size-4 text-amber-500" />
+              <span>Revoke API Key?</span>
+            </DialogTitle>
+            <DialogDescription>
+              Clients authenticating with <strong>{revokeTarget?.label}</strong> will receive <code>401 Unauthorized</code> immediately. You can re-enable or remove it later.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRevokeTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={togglingRevoke}
+              onClick={() => revokeTarget && handleToggleRevoke(revokeTarget, true)}
+            >
+              {togglingRevoke ? "Revoking..." : "Revoke Key"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove Modal */}
+      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="size-4" />
+              <span>Remove API Key?</span>
+            </DialogTitle>
+            <DialogDescription>
+              Permanently deletes <strong>{deleteTarget?.label}</strong> and purges its HKDF encrypted vault envelope. Any client still using this token will lose access immediately.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleConfirmDelete} disabled={deleting}>
+              {deleting ? "Removing..." : "Remove Permanently"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manual HTTP Clipboard Fallback Modal */}
+      <Dialog
+        open={Boolean(fallbackSecret)}
+        onOpenChange={(open) => {
+          if (!open) setFallbackSecret(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Manual Copy Required</DialogTitle>
+            <DialogDescription>
+              Automatic clipboard access was blocked for <strong>{fallbackSecret?.label}</strong>. Select and copy the key below, then close this dialog.
+            </DialogDescription>
+          </DialogHeader>
+          <code className="block overflow-x-auto rounded-lg border bg-muted p-3 font-mono text-xs select-all">
+            {fallbackSecret?.value}
+          </code>
+          <DialogFooter>
+            <Button onClick={() => setFallbackSecret(null)}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </main>
   )
 }
