@@ -2,33 +2,36 @@ import { useState } from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
+  Blocks,
   CheckCircle2,
   Database,
   FileCode2,
   FolderKanban,
   HardDrive,
   Image as ImageIcon,
-  KeyRound,
   Palette,
   RefreshCw,
   Server,
   Settings2,
+  ShieldAlert,
   XCircle,
 } from "lucide-react"
 import { toast } from "sonner"
 
 import {
+  ApiHttpError,
+  authSessionQuery,
   fetchAdminSettings,
   fetchAdminStatus,
+  revokeAllSessions,
   triggerReindex,
 } from "@/api/styles"
+import { AuthGateCard } from "@/components/common/AuthGateCard"
 import { PageHeader } from "@/components/common/PageHeader"
 import { StatCard } from "@/components/common/StatCard"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 
 export const Route = createFileRoute("/admin")({
@@ -37,18 +40,51 @@ export const Route = createFileRoute("/admin")({
 
 function AdminPage() {
   const queryClient = useQueryClient()
-  const [apiKey, setApiKey] = useState("")
+  const sessionQuery = useQuery(authSessionQuery)
+  const session = sessionQuery.data
+
   const [reindexing, setReindexing] = useState(false)
+  const [revokingSessions, setRevokingSessions] = useState(false)
+
+  const mustSignIn = Boolean(session?.auth_required && !session?.authenticated)
 
   const statusQuery = useQuery({
-    queryKey: ["admin-status", apiKey],
-    queryFn: () => fetchAdminStatus(apiKey || undefined),
+    queryKey: ["admin-status", session?.authenticated, session?.session_epoch],
+    queryFn: fetchAdminStatus,
+    enabled: !mustSignIn,
+    retry: false,
   })
 
   const settingsQuery = useQuery({
-    queryKey: ["admin-settings", apiKey],
-    queryFn: () => fetchAdminSettings(apiKey || undefined),
+    queryKey: ["admin-settings", session?.authenticated, session?.session_epoch],
+    queryFn: fetchAdminSettings,
+    enabled: !mustSignIn,
+    retry: false,
   })
+
+  const isUnauthorized =
+    (statusQuery.error instanceof ApiHttpError && statusQuery.error.status === 401) ||
+    (settingsQuery.error instanceof ApiHttpError && settingsQuery.error.status === 401)
+
+  if (mustSignIn || isUnauthorized) {
+    return (
+      <main className="flex-1 space-y-6">
+        <PageHeader
+          icon={Settings2}
+          title="Corpus Admin & Runtime Diagnostics"
+          description="Sign in with LNC SSO or break-glass management key to inspect corpus diagnostics or trigger hot re-indexing."
+        />
+        <AuthGateCard
+          nextPath="/admin"
+          oidcEnabled={session?.oidc_enabled ?? true}
+          mgmtKeyConfigured={session?.mgmt_key_configured ?? true}
+          onAuthenticated={() => {
+            queryClient.invalidateQueries()
+          }}
+        />
+      </main>
+    )
+  }
 
   const status = statusQuery.data
   const settings = settingsQuery.data
@@ -56,15 +92,35 @@ function AdminPage() {
   const handleReindex = async () => {
     setReindexing(true)
     try {
-      const res = await triggerReindex(apiKey || undefined)
+      const res = await triggerReindex()
       await queryClient.invalidateQueries()
       toast.success(
-        `Re-indexed ${res.summary.styles_count} styles (${res.summary.previews_count ?? 0} previews) & ${res.summary.templates_count} templates`
+        `Re-indexed ${res.summary.styles_count} styles (${res.summary.previews_count ?? 0} previews), ${res.summary.templates_count} templates & ${res.summary.components_count ?? 0} components`
       )
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Re-index failed")
     } finally {
       setReindexing(false)
+    }
+  }
+
+  const handleRevokeAll = async () => {
+    if (
+      !window.confirm(
+        "Invalidate all active browser sessions across every device by incrementing session_epoch?"
+      )
+    ) {
+      return
+    }
+    setRevokingSessions(true)
+    try {
+      const res = await revokeAllSessions()
+      await queryClient.invalidateQueries()
+      toast.success(`All sessions revoked (epoch ${res.session_epoch})`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to revoke sessions")
+    } finally {
+      setRevokingSessions(false)
     }
   }
 
@@ -77,17 +133,30 @@ function AdminPage() {
       <PageHeader
         icon={Settings2}
         title="Corpus Admin & Runtime Diagnostics"
-        description="Inspect read-only NAS/local corpus paths, trigger zero-downtime hot re-indexing, and review masked service settings."
+        description="Inspect read-only NAS/local corpus paths, trigger zero-downtime hot re-indexing, and manage session security."
         actions={
-          <Button onClick={handleReindex} disabled={reindexing}>
-            <RefreshCw className={cn("size-4", reindexing && "animate-spin")} />
-            {reindexing ? "Scanning Corpora..." : "Trigger Hot Re-Index"}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {session?.authenticated ? (
+              <Button
+                variant="outline"
+                onClick={handleRevokeAll}
+                disabled={revokingSessions}
+                className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                <ShieldAlert className="size-4" />
+                <span>{revokingSessions ? "Revoking..." : "Revoke All Sessions"}</span>
+              </Button>
+            ) : null}
+            <Button onClick={handleReindex} disabled={reindexing}>
+              <RefreshCw className={cn("size-4", reindexing && "animate-spin")} />
+              {reindexing ? "Scanning Corpora..." : "Trigger Hot Re-Index"}
+            </Button>
+          </div>
         }
       />
 
       {/* Corpus Metrics */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           label="Indexed Styles"
           value={status?.styles_count ?? "—"}
@@ -109,8 +178,14 @@ function AdminPage() {
         <StatCard
           label="HTML Templates"
           value={status?.templates_count ?? "—"}
-          hint="50 EN + 50 VI prompt-driven-ui"
+          hint="EN + VI prompt-driven-ui"
           icon={FileCode2}
+        />
+        <StatCard
+          label="UI Components"
+          value={status?.components_count ?? 0}
+          hint="LNC HTML + Knowns TSX"
+          icon={Blocks}
         />
       </div>
 
@@ -126,12 +201,12 @@ function AdminPage() {
               Last indexed at: <span className="font-mono text-foreground">{indexedTime}</span>
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4 text-xs">
+          <CardContent className="space-y-3.5 text-xs">
             <div className="rounded-xl border border-border/70 bg-muted/25 p-3.5">
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="font-semibold text-foreground">Refero Styles Corpus</span>
                 {status?.refero_dir_exists ? (
-                  <Badge variant="outline" className="gap-1 border-emerald-500/40 text-emerald-400">
+                  <Badge variant="outline" className="gap-1 border-emerald-500/40 text-emerald-500">
                     <CheckCircle2 className="size-3" /> Mounted
                   </Badge>
                 ) : (
@@ -149,7 +224,7 @@ function AdminPage() {
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="font-semibold text-foreground">Prompt-Driven UI Corpus</span>
                 {status?.prompt_ui_dir_exists ? (
-                  <Badge variant="outline" className="gap-1 border-emerald-500/40 text-emerald-400">
+                  <Badge variant="outline" className="gap-1 border-emerald-500/40 text-emerald-500">
                     <CheckCircle2 className="size-3" /> Mounted
                   </Badge>
                 ) : (
@@ -163,25 +238,22 @@ function AdminPage() {
               </code>
             </div>
 
-            {/* Optional Admin API Key for protected mutations */}
-            <div className="space-y-2 border-t border-border/60 pt-3">
-              <Label htmlFor="admin-api-key" className="flex items-center gap-1.5 text-xs">
-                <KeyRound className="size-3.5 text-muted-foreground" />
-                Optional Admin API Key (X-API-Key)
-              </Label>
-              <div className="flex gap-2">
-                <Input
-                  id="admin-api-key"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="Leave blank if STYLES_API_KEY is not enforced..."
-                  className="text-xs"
-                />
-                <Button variant="outline" size="sm" onClick={handleReindex} disabled={reindexing}>
-                  Re-Index Now
-                </Button>
+            <div className="rounded-xl border border-border/70 bg-muted/25 p-3.5">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="font-semibold text-foreground">LNC & Knowns Components</span>
+                {status?.components_dir_exists ? (
+                  <Badge variant="outline" className="gap-1 border-emerald-500/40 text-emerald-500">
+                    <CheckCircle2 className="size-3" /> Mounted
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="gap-1">
+                    <XCircle className="size-3" /> Optional / Unmounted
+                  </Badge>
+                )}
               </div>
+              <code className="block break-all font-mono text-[11px] text-muted-foreground">
+                {status?.components_dir ?? settings?.components_dir ?? "—"}
+              </code>
             </div>
           </CardContent>
         </Card>
@@ -194,15 +266,15 @@ function AdminPage() {
               Service Configuration (Masked)
             </CardTitle>
             <CardDescription className="text-xs">
-              Environment settings from <code className="text-foreground">/api/admin/settings</code>
+              Runtime status from <code className="text-foreground">/api/admin/settings</code>
             </CardDescription>
           </CardHeader>
           <CardContent>
             {settings ? (
               <dl className="divide-y divide-border/50 text-xs">
                 <div className="flex justify-between py-2">
-                  <dt className="text-muted-foreground">Service Name</dt>
-                  <dd className="font-mono text-foreground">{settings.service_name}</dd>
+                  <dt className="text-muted-foreground">Service / Runtime</dt>
+                  <dd className="font-mono text-foreground">{settings.service_name} (Rust/Axum)</dd>
                 </div>
                 <div className="flex justify-between py-2">
                   <dt className="text-muted-foreground">Version</dt>
@@ -219,20 +291,39 @@ function AdminPage() {
                   </dd>
                 </div>
                 <div className="flex justify-between py-2">
-                  <dt className="text-muted-foreground">Data Root</dt>
-                  <dd className="max-w-[260px] truncate font-mono text-foreground" title={settings.data_root}>
+                  <dt className="text-muted-foreground">Data Root (Read-Only)</dt>
+                  <dd
+                    className="max-w-[260px] truncate font-mono text-foreground"
+                    title={settings.data_root}
+                  >
                     {settings.data_root}
                   </dd>
                 </div>
                 <div className="flex justify-between py-2">
-                  <dt className="text-muted-foreground">API Key Configured</dt>
+                  <dt className="text-muted-foreground">OIDC SSO (lengoc)</dt>
                   <dd className="font-mono text-foreground">
-                    {settings.api_key_configured ? `Yes (${settings.api_key_masked})` : "No (Open on LAN)"}
+                    {settings.oidc_enabled ? "Enabled (PKCE S256)" : "Not Configured"}
                   </dd>
                 </div>
                 <div className="flex justify-between py-2">
-                  <dt className="text-muted-foreground">CORS Origins</dt>
-                  <dd className="font-mono text-foreground">{settings.cors_origins}</dd>
+                  <dt className="text-muted-foreground">Management Key</dt>
+                  <dd className="font-mono text-foreground">
+                    {settings.api_key_configured
+                      ? `Configured (${settings.api_key_masked})`
+                      : "Not Set"}
+                  </dd>
+                </div>
+                <div className="flex justify-between py-2">
+                  <dt className="text-muted-foreground">Session Epoch</dt>
+                  <dd className="font-mono text-foreground">
+                    {settings.session_epoch ?? session?.session_epoch ?? 1}
+                  </dd>
+                </div>
+                <div className="flex justify-between py-2">
+                  <dt className="text-muted-foreground">Allowed Hosts / CORS</dt>
+                  <dd className="font-mono text-foreground">
+                    {settings.allowed_hosts ?? "*"} · {settings.cors_origins}
+                  </dd>
                 </div>
               </dl>
             ) : (

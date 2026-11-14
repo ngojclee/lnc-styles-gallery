@@ -52,6 +52,8 @@ export interface SearchResponse {
   styles: StyleItem[]
   total_templates: number
   templates: TemplateItem[]
+  total_components?: number
+  components?: ComponentItem[]
 }
 
 export interface CollectionItem {
@@ -173,8 +175,11 @@ export interface CorpusStatus {
   refero_dir_exists: boolean
   prompt_ui_dir: string
   prompt_ui_dir_exists: boolean
+  components_dir?: string
+  components_dir_exists?: boolean
   themes: Record<string, number>
   categories: CategoryFacet[]
+  warnings?: string[]
 }
 
 export interface AdminSettingsResponse {
@@ -184,11 +189,53 @@ export interface AdminSettingsResponse {
   port: number
   public_base_url: string
   data_root: string
+  config_dir?: string
   refero_dir: string
   refero_dir_exists: boolean
   prompt_ui_dir: string
   prompt_ui_dir_exists: boolean
+  components_dir?: string
+  components_dir_exists?: boolean
   api_key_configured: boolean
   api_key_masked: string
+  mgmt_key_configured?: boolean
+  mgmt_key_masked?: string
+  oidc_enabled?: boolean
+  auth_required?: boolean
+  mcp_auth_required?: boolean
+  session_epoch?: number
   cors_origins: string
+  allowed_hosts?: string
+}
+
+export interface AuthUserInfo {
+  sub?: string
+  username?: string
+  email?: string | null
+  name?: string | null
+  groups?: string[]
+}
+
+export interface AuthSessionResponse {
+  authenticated: boolean
+  auth_required: boolean
+  mode: "oidc" | "mgmt_key" | "admin_header" | string | null
+  sub: string | null
+  user: AuthUserInfo | null
+  oidc_enabled: boolean
+  mgmt_key_configured: boolean
+  session_epoch: number
+  expires_at: number | null
+  idle_expires_at: number | null
+}
+
+export interface PublicApiKeyItem {
+  id: string
+  label: string
+  prefix: string
+  last4?: string
+  masked?: string
+  enabled: boolean
+  created: string
+  rotated_at?: string | null
 }

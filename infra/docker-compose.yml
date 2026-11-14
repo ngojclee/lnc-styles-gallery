@@ -1,11 +1,9 @@
 version: "3.8"
 
-# LNC Style Library (styles.lengoc.me)
+# LNC Style Library (styles.lengoc.me) — Rust/Axum Runtime (v1.0.0.0)
 #   Web: http://<host>:8460  (container 8000)
-#   Data: bind ${DATA_DIR}/lnc-styles-gallery -> /data (read-only corpus)
-#         corpus = refero-styles/ + prompt-driven-ui/ synced from
-#         \\10.21.2.2\data\_agentsync\repos\ (script scripts/sync_data_from_nas.bat)
-#   Env: STYLES_API_KEY (admin reindex auth, optional), TZ, DATA_DIR
+#   Data: bind ${DATA_DIR}/lnc-styles-gallery -> /data:ro (read-only corpus)
+#   Config: bind ${DATA_DIR}/lnc-styles-gallery-config -> /config (vault & hashed keys)
 
 services:
   lnc-styles-gallery:
@@ -18,19 +16,31 @@ services:
       - "8460:8000"
     environment:
       - PORT=8000
+      - STYLES_PORT=8000
       - STYLES_DATA_DIR=/data
-      - STYLES_PUBLIC_URL=https://styles.lengoc.me
-      - STYLES_API_KEY=${STYLES_API_KEY:-}
-      - STYLES_MCP_AUTH=${STYLES_MCP_AUTH:-}
       - STYLES_CONFIG_DIR=/config
+      - STYLES_PUBLIC_URL=${STYLES_PUBLIC_URL:-https://styles.lengoc.me}
+      - LNC_MASTER_KEY=${LNC_MASTER_KEY:-}
+      - LNC_REQUIRE_MASTER_KEY=${LNC_REQUIRE_MASTER_KEY:-false}
+      - MANAGEMENT_KEY=${MANAGEMENT_KEY:-}
+      - STYLES_API_KEY=${STYLES_API_KEY:-}
+      - STYLES_MCP_AUTH=${STYLES_MCP_AUTH:-1}
+      - OIDC_ENABLED=${OIDC_ENABLED:-}
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-lnc-styles-gallery}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-https://styles.lengoc.me/api/auth/oidc/callback}
+      - OIDC_ALLOWED_USERS=${OIDC_ALLOWED_USERS:-}
+      - OIDC_ALLOWED_GROUPS=${OIDC_ALLOWED_GROUPS:-}
       - TZ=${TZ:-Europe/Paris}
-      - ALLOWED_HOSTS=*
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
     volumes:
       - ${DATA_DIR:-/home/Docker}/lnc-styles-gallery:/data:ro
       - ${DATA_DIR:-/home/Docker}/lnc-styles-gallery-config:/config
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\" || exit 1"]
+      test: ["CMD", "/app/lnc-styles-gallery", "--healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 5s

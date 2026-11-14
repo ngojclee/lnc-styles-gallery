@@ -1,0 +1,209 @@
+{
+  "service": "lnc-styles-gallery",
+  "version": "1.0.0.0",
+  "track": "Track M (Migration & Security Hardening)",
+  "generated_at": "2026-11-14T05:04:24Z",
+  "total_score": 100.0,
+  "verdict": "RELEASE_READY (SHIP / CUTOVER)",
+  "hard_fail": "CLEAR",
+  "failures": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "metrics": {
+    "binary_size_bytes": 6929920,
+    "boot_ms": 511.78,
+    "idle_rss_mb": 8.32,
+    "p50_ms": 0.52,
+    "p95_ms": 15.95,
+    "post_load_rss_mb": 8.57
+  },
+  "checks": [
+    {
+      "category": "health",
+      "id": "H01",
+      "title": "Compiled release binary & built React SPA bundle present",
+      "passed": true,
+      "severity": "Critical",
+      "detail": "binary=6,929,920 bytes, ui/dist/index.html=True"
+    },
+    {
+      "category": "security",
+      "id": "S01",
+      "title": "Compiled SPA bundle contains zero `raw_key` references",
+      "passed": true,
+      "severity": "High",
+      "detail": "raw_key_in_dist=False, sample_bundle=/static/admin-DE0xNSRr.js"
+    },
+    {
+      "category": "health",
+      "id": "H02",
+      "title": "Server boots cleanly on ephemeral PORT and serves /health",
+      "passed": true,
+      "severity": "Critical",
+      "detail": "boot_ms=511.78ms, idle_rss=8.32MB"
+    },
+    {
+      "category": "health",
+      "id": "H03",
+      "title": "Built-in `--healthcheck` subcommand exits 0",
+      "passed": true,
+      "severity": "Medium",
+      "detail": "exit_code=0"
+    },
+    {
+      "category": "health",
+      "id": "H04",
+      "title": "Version 1.0.0.0, corpus counts, p95 latency (<50ms) & RSS (<80MB)",
+      "passed": true,
+      "severity": "High",
+      "detail": "v=1.0.0.0, styles=3, p50=0.52ms, p95=15.95ms, rss=8.57MB"
+    },
+    {
+      "category": "journeys",
+      "id": "J01",
+      "title": "Styles list, filter, detail, preview SVG, fallback SVG & shots",
+      "passed": true,
+      "severity": "High",
+      "detail": "dark_total=2, fallback_svg_bytes=2307"
+    },
+    {
+      "category": "journeys",
+      "id": "J02",
+      "title": "Full-text search (styles + templates + components) & collections (incl. sitemap)",
+      "passed": true,
+      "severity": "High",
+      "detail": "collections=15, lnc_style_count=1"
+    },
+    {
+      "category": "journeys",
+      "id": "J03",
+      "title": "Templates EN/VI list, detail, iframe HTML, fallback thumb, prompt & sibling CSS",
+      "passed": true,
+      "severity": "High",
+      "detail": "vi_total=1, html_bytes=209, css_bytes=45"
+    },
+    {
+      "category": "journeys",
+      "id": "J04",
+      "title": "Components catalog (HTML + TSX), inline sources & file serving",
+      "passed": true,
+      "severity": "High",
+      "detail": "components_total=2"
+    },
+    {
+      "category": "journeys",
+      "id": "J05",
+      "title": "Licenses (4 corpora), /api/mcp/info, SPA HTML shell, hashed JS & missing-asset 404",
+      "passed": true,
+      "severity": "Medium",
+      "detail": "corpora=4, mcp_tools=8"
+    },
+    {
+      "category": "security",
+      "id": "S02",
+      "title": "Legacy `keys.json` & `MANAGEMENT_KEY` scrubbed on disk (HMAC + Argon2id only)",
+      "passed": true,
+      "severity": "Critical",
+      "detail": "keys.json holds salted HMAC digest; config.json holds Argon2id PHC hash"
+    },
+    {
+      "category": "security",
+      "id": "S03",
+      "title": "Unauthenticated requests blocked (302 on /keys & /admin; 401 on /api/keys, /api/admin/*, /mcp)",
+      "passed": true,
+      "severity": "Critical",
+      "detail": "/keys=302, /admin=302, /api/keys=401, /mcp=401"
+    },
+    {
+      "category": "security",
+      "id": "S04",
+      "title": "/login.html OIDC SSO primary + collapsed `<details>` break-glass + strict headers/CSP",
+      "passed": true,
+      "severity": "High",
+      "detail": "xfo=SAMEORIGIN, nosniff=nosniff"
+    },
+    {
+      "category": "security",
+      "id": "S05",
+      "title": "OIDC PKCE S256 + RS256 JWKS + nonce + allowlist + state tamper rejection",
+      "passed": true,
+      "severity": "Critical",
+      "detail": "oidc_user=kc-louis, deny_loc=/login.html?error=not_allowed"
+    },
+    {
+      "category": "security",
+      "id": "S06",
+      "title": "Zero-F12-Leak key lifecycle (one-time create/rotate, masked GET, 410 on /copy, revoke/delete)",
+      "passed": true,
+      "severity": "Critical",
+      "detail": "copy_status=410, old_tok=401, rot_tok=200, revoked_tok=401"
+    },
+    {
+      "category": "security",
+      "id": "S07",
+      "title": "CSRF Origin guard (403), SSRF metadata block (400) & revoke-all session_epoch invalidation",
+      "passed": true,
+      "severity": "High",
+      "detail": "csrf=403, ssrf=(400,400), post_revoke_all=401"
+    },
+    {
+      "category": "security",
+      "id": "S08",
+      "title": "Break-glass Argon2id login succeeds & 9th failed attempt returns 429 + Retry-After",
+      "passed": true,
+      "severity": "High",
+      "detail": "mgmt_login=200, 9th_status=429, retry_after=300s"
+    },
+    {
+      "category": "security",
+      "id": "S09",
+      "title": "Path traversal probes rejected across styles, templates, components & static routes",
+      "passed": true,
+      "severity": "High",
+      "detail": "probe_statuses=[400, 400, 400, 400, 400]"
+    },
+    {
+      "category": "mcp",
+      "id": "M01",
+      "title": "MCP `initialize`, `notifications/initialized` (HTTP 202) & `tools/list` (all 8 tools)",
+      "passed": true,
+      "severity": "Critical",
+      "detail": "notif=202, tools=8 (list_styles,search,get_design,list_collections,get_template,list_components,get_component,reindex)"
+    },
+    {
+      "category": "mcp",
+      "id": "M02",
+      "title": "All 8 MCP tools execute cleanly (both unprefixed and `styles__*` prefixed)",
+      "passed": true,
+      "severity": "Critical",
+      "detail": "tools_passed=8/8"
+    },
+    {
+      "category": "mcp",
+      "id": "M03",
+      "title": "JSON-RPC `-32601` on unknown method & `isError: true` on unknown tool",
+      "passed": true,
+      "severity": "Medium",
+      "detail": "method_err=-32601, tool_isError=True"
+    },
+    {
+      "category": "resilience",
+      "id": "R01",
+      "title": "Graceful error handling (malformed JSON, missing entities) & hot `/api/admin/reindex`",
+      "passed": true,
+      "severity": "Medium",
+      "detail": "bad_json=400, 404s=(404,404,404), reindex=200"
+    },
+    {
+      "category": "resilience",
+      "id": "R02",
+      "title": "Read-only `${STYLES_DATA_DIR}` corpus completely unmutated across boot, queries & reindex",
+      "passed": true,
+      "severity": "High",
+      "detail": "files_tracked=34, mutated=False"
+    }
+  ]
+}

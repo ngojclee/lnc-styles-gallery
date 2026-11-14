@@ -1,15 +1,29 @@
 {
-  "project": "lnc-styles-gallery",
-  "description": "LNC Style Library — internal gallery, REST API, and Streamable HTTP MCP server for Refero design styles and prompt-driven-ui HTML templates.",
-  "skills": [
-    "lnc-skill-index",
-    "lnc-internal-app-blueprint",
-    "lnm-style-library",
-    "release-portainer-app",
-    "dev-backend-iris",
-    "dev-frontend-luna",
-    "architect-zen",
-    "planner-alex",
-    "reviewer-kai"
+  "entries": [
+    {
+      "path": "\\\\10.21.2.2\\data\\_agentsync\\skills",
+      "include_only": [
+        "lnc-internal-app-blueprint",
+        "lnc-internal-app-migration",
+        "lnc-portainer",
+        "release-portainer-app",
+        "business-mcp-connector",
+        "lnc-ssh",
+        "lnc-security-code-audit",
+        "lnm-ui-ux",
+        "lnm-style-library",
+        "w2-specdrivendev",
+        "w5-round-orchestrator",
+        "w18-e2e-qa-scorecard",
+        "architect-zen",
+        "planner-alex",
+        "dev-backend-iris",
+        "dev-frontend-luna",
+        "reviewer-kai",
+        "qa-tester-vera",
+        "lnc-keycloak",
+        "lnc-skill-index"
+      ]
+    }
   ]
 }
